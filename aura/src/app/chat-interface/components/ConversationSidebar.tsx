@@ -1,0 +1,285 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
+import {
+  Plus,
+  Search,
+  MessageSquare,
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  Check,
+  X,
+} from 'lucide-react';
+import {
+  CHAT_SESSION_TITLES_UPDATED,
+  getSessionTitle,
+  writeSessionTitle,
+} from '@/hooks/chatSessionTitles';
+
+interface HistoryItem {
+  id: string;
+  title: string;
+  timestamp: Date;
+}
+
+interface ConversationSidebarProps {
+  activeSessionId: string;
+  onNewChat: (sessionId?: string) => void;
+  onSessionChange: (id: string) => void;
+}
+
+export default function ConversationSidebar({
+  activeSessionId,
+  onNewChat,
+  onSessionChange,
+}: ConversationSidebarProps) {
+  const [search, setSearch] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
+    new Set(['Today', 'Yesterday', 'Older'])
+  );
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState('');
+
+  useEffect(() => {
+    const loadHistory = () => {
+      fetch('http://localhost:8000/api/chat')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.messages) {
+            const sessionsMap: Record<string, HistoryItem> = {};
+            data.messages.forEach((m: any) => {
+              const sid = m.session_id || 'default';
+              const messageTimestamp = m.timestamp ? new Date(m.timestamp) : new Date();
+              if (!sessionsMap[sid]) {
+                sessionsMap[sid] = {
+                  id: sid,
+                  title: getSessionTitle(sid, m.role === 'user' ? m.content : 'New chat'),
+                  timestamp: messageTimestamp,
+                };
+                return;
+              }
+
+              if (m.role === 'user' && !sessionsMap[sid].title) {
+                sessionsMap[sid].title = m.content;
+              }
+
+              if (messageTimestamp > sessionsMap[sid].timestamp) {
+                sessionsMap[sid].timestamp = messageTimestamp;
+              }
+            });
+
+            const items = Object.values(sessionsMap)
+              .map((item) => ({
+                ...item,
+                title: getSessionTitle(item.id, item.title || 'New chat'),
+              }))
+              .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+            setHistoryItems(items);
+          }
+        })
+        .catch((err) => console.error('Failed to load sidebar history:', err));
+    };
+
+    loadHistory();
+    window.addEventListener('akansha-history-updated', loadHistory);
+    window.addEventListener(CHAT_SESSION_TITLES_UPDATED, loadHistory);
+    return () => {
+      window.removeEventListener('akansha-history-updated', loadHistory);
+      window.removeEventListener(CHAT_SESSION_TITLES_UPDATED, loadHistory);
+    };
+  }, []);
+
+  const startRenaming = (event: React.MouseEvent, conversation: HistoryItem) => {
+    event.stopPropagation();
+    setEditingSessionId(conversation.id);
+    setDraftTitle(conversation.title);
+  };
+
+  const submitRename = (event?: React.MouseEvent | React.FormEvent) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (!editingSessionId) return;
+
+    writeSessionTitle(editingSessionId, draftTitle);
+    setEditingSessionId(null);
+    setDraftTitle('');
+  };
+
+  const cancelRename = (event?: React.MouseEvent) => {
+    event?.stopPropagation();
+    setEditingSessionId(null);
+    setDraftTitle('');
+  };
+
+  const toggleGroup = (id: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Group history items
+  const visibleHistoryItems = historyItems.some((item) => item.id === activeSessionId)
+    ? historyItems
+    : [{ id: activeSessionId, title: 'New chat', timestamp: new Date() }, ...historyItems];
+
+  const now = new Date();
+  const todayItems = visibleHistoryItems.filter(
+    (i) => i.timestamp.toDateString() === now.toDateString()
+  );
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayItems = visibleHistoryItems.filter(
+    (i) => i.timestamp.toDateString() === yesterday.toDateString()
+  );
+  const olderItems = visibleHistoryItems.filter(
+    (i) => i.timestamp < yesterday && i.timestamp.toDateString() !== yesterday.toDateString()
+  );
+
+  const groups = [
+    { label: 'Today', items: todayItems },
+    { label: 'Yesterday', items: yesterdayItems },
+    { label: 'Older', items: olderItems },
+  ];
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="p-3 border-b border-border">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Conversations
+          </span>
+          <button
+            onClick={() => onNewChat()}
+            className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            title="New conversation"
+          >
+            <Plus size={15} />
+          </button>
+        </div>
+        <div className="relative">
+          <Search
+            size={13}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+          />
+          <input
+            type="text"
+            placeholder="Search..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full bg-muted rounded-lg text-xs pl-7 pr-3 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-[#6C47FF]/40 border-0"
+          />
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
+        {/* Conversation groups */}
+        {groups.map((group) => {
+          const filtered = group.items.filter(
+            (i) => !search || i.title.toLowerCase().includes(search.toLowerCase())
+          );
+          if (filtered.length === 0) return null;
+
+          const isExpanded = expandedGroups.has(group.label);
+
+          return (
+            <div key={`group-${group.label}`} className="mb-3">
+              <button
+                onClick={() => toggleGroup(group.label)}
+                className="flex items-center gap-1 w-full text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1 mb-1 hover:text-foreground transition-colors"
+              >
+                {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                {group.label}
+              </button>
+
+              {isExpanded &&
+                filtered.map((conv) => (
+                  <div
+                    key={conv.id}
+                    onClick={() => onSessionChange(conv.id)}
+                    className={`group flex items-start gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors mb-0.5 ${
+                      activeSessionId === conv.id
+                        ? 'bg-[#6C47FF]/10 text-[#6C47FF] border border-[#6C47FF]/20'
+                        : 'hover:bg-muted text-muted-foreground hover:text-foreground border border-transparent'
+                    }`}
+                  >
+                    <MessageSquare
+                      size={12}
+                      className={`mt-1 shrink-0 ${activeSessionId === conv.id ? 'text-[#6C47FF]' : 'text-[#6C47FF]/70'}`}
+                    />
+                    <div className="flex-1 min-w-0">
+                      {editingSessionId === conv.id ? (
+                        <form onSubmit={submitRename} className="flex items-center gap-1.5">
+                          <input
+                            autoFocus
+                            value={draftTitle}
+                            onChange={(event) => setDraftTitle(event.target.value)}
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Escape') {
+                                cancelRename();
+                              }
+                            }}
+                            className="w-full bg-muted rounded-md px-2 py-1 text-xs text-foreground border border-[#6C47FF]/30 focus:outline-none focus:ring-1 focus:ring-[#6C47FF]/50"
+                          />
+                          <button
+                            type="submit"
+                            onClick={submitRename}
+                            className="p-1 rounded-md text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+                            title="Save name"
+                          >
+                            <Check size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelRename}
+                            className="p-1 rounded-md text-muted-foreground hover:bg-muted transition-colors"
+                            title="Cancel rename"
+                          >
+                            <X size={12} />
+                          </button>
+                        </form>
+                      ) : (
+                        <div className="flex items-start gap-2">
+                          <p
+                            className={`flex-1 text-xs font-medium truncate ${activeSessionId === conv.id ? 'text-foreground' : ''}`}
+                          >
+                            {conv.title}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={(event) => startRenaming(event, conv)}
+                            className="opacity-0 group-hover:opacity-100 p-1 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-all"
+                            title="Rename chat"
+                          >
+                            <Pencil size={12} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="p-2 border-t border-border">
+        <Link
+          href="/conversation-history"
+          className="flex items-center gap-2 px-2 py-2 rounded-lg text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        >
+          <MessageSquare size={13} />
+          View all history
+        </Link>
+      </div>
+    </div>
+  );
+}

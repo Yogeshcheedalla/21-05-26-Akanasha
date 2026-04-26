@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+openai
+python-dotenv
+sqlalchemy
+pydantic
+aiohttp
+pyautogui
+pymupdf
+python-pptx
+pillow
+edge-tts

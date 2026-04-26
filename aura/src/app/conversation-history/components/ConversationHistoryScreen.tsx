@@ -1,0 +1,313 @@
+'use client';
+
+import React, { useState } from 'react';
+import FolderSidebar from './FolderSidebar';
+import ConversationList from './ConversationList';
+import ConversationPreview from './ConversationPreview';
+
+export type Conversation = {
+  id: string;
+  title: string;
+  summary: string;
+  model: string;
+  modelColor: string;
+  folder: string;
+  folderId: string;
+  messageCount: number;
+  tokenCount: number;
+  createdAt: string;
+  updatedAt: string;
+  starred: boolean;
+  shared: boolean;
+  shareVisibility?: 'public' | 'private';
+  hasMemory: boolean;
+  hasAttachments: boolean;
+  tags: string[];
+  status: 'active' | 'archived' | 'summarized';
+};
+
+export const ALL_CONVERSATIONS: Conversation[] = [
+  {
+    id: 'conv-h001',
+    title: 'Refactor auth middleware',
+    summary: 'Discussed async/await patterns for Express.js auth middleware, JWT error handling, and rate limiting with Redis store for distributed deployments.',
+    model: 'GPT-4o',
+    modelColor: 'bg-green-500',
+    folder: 'Work',
+    folderId: 'folder-work',
+    messageCount: 14,
+    tokenCount: 4218,
+    createdAt: '2026-04-24T08:32:00Z',
+    updatedAt: '2026-04-24T09:15:00Z',
+    starred: true,
+    shared: false,
+    hasMemory: true,
+    hasAttachments: true,
+    tags: ['typescript', 'backend', 'security'],
+    status: 'active',
+  },
+  {
+    id: 'conv-h002',
+    title: 'Explain RLHF in simple terms',
+    summary: 'Explained Reinforcement Learning from Human Feedback using real-world analogies — training loop, reward models, and why RLHF matters for alignment.',
+    model: 'Claude 3.5 Sonnet',
+    modelColor: 'bg-orange-400',
+    folder: 'Research',
+    folderId: 'folder-research',
+    messageCount: 7,
+    tokenCount: 2841,
+    createdAt: '2026-04-24T07:10:00Z',
+    updatedAt: '2026-04-24T07:48:00Z',
+    starred: true,
+    shared: true,
+    shareVisibility: 'public',
+    hasMemory: false,
+    hasAttachments: false,
+    tags: ['ai', 'ml', 'research'],
+    status: 'active',
+  },
+  {
+    id: 'conv-h003',
+    title: 'Draft Q2 product roadmap',
+    summary: 'Drafted a comprehensive Q2 product roadmap with feature prioritization, resource allocation, and OKR alignment for a B2B SaaS product team.',
+    model: 'Gemini 1.5 Pro',
+    modelColor: 'bg-blue-400',
+    folder: 'Work',
+    folderId: 'folder-work',
+    messageCount: 22,
+    tokenCount: 8932,
+    createdAt: '2026-04-23T14:20:00Z',
+    updatedAt: '2026-04-23T16:05:00Z',
+    starred: false,
+    shared: true,
+    shareVisibility: 'private',
+    hasMemory: true,
+    hasAttachments: true,
+    tags: ['product', 'strategy', 'planning'],
+    status: 'summarized',
+  },
+  {
+    id: 'conv-h004',
+    title: 'SQL query optimization tips',
+    summary: 'Covered index strategies, query execution plans, EXPLAIN ANALYZE in PostgreSQL, N+1 problem solutions, and connection pooling best practices.',
+    model: 'GPT-4o',
+    modelColor: 'bg-green-500',
+    folder: 'Work',
+    folderId: 'folder-work',
+    messageCount: 9,
+    tokenCount: 3140,
+    createdAt: '2026-04-23T11:00:00Z',
+    updatedAt: '2026-04-23T11:52:00Z',
+    starred: true,
+    shared: false,
+    hasMemory: true,
+    hasAttachments: false,
+    tags: ['database', 'postgresql', 'performance'],
+    status: 'active',
+  },
+  {
+    id: 'conv-h005',
+    title: 'Kubernetes pod scheduling',
+    summary: 'Deep dive into Kubernetes scheduling algorithms, node affinity/anti-affinity rules, taints and tolerations, and resource request/limit tuning.',
+    model: 'Claude 3.5 Sonnet',
+    modelColor: 'bg-orange-400',
+    folder: 'Work',
+    folderId: 'folder-work',
+    messageCount: 16,
+    tokenCount: 5677,
+    createdAt: '2026-04-23T09:30:00Z',
+    updatedAt: '2026-04-23T10:41:00Z',
+    starred: false,
+    shared: false,
+    hasMemory: false,
+    hasAttachments: true,
+    tags: ['devops', 'kubernetes', 'infrastructure'],
+    status: 'active',
+  },
+  {
+    id: 'conv-h006',
+    title: 'RAG pipeline architecture',
+    summary: 'Designed a production RAG pipeline with chunking strategies, embedding models, vector database selection (Pinecone vs Weaviate), and re-ranking approaches.',
+    model: 'GPT-4o',
+    modelColor: 'bg-green-500',
+    folder: 'Research',
+    folderId: 'folder-research',
+    messageCount: 31,
+    tokenCount: 12480,
+    createdAt: '2026-04-22T15:00:00Z',
+    updatedAt: '2026-04-22T17:30:00Z',
+    starred: false,
+    shared: false,
+    hasMemory: true,
+    hasAttachments: true,
+    tags: ['rag', 'vector-db', 'embeddings'],
+    status: 'summarized',
+  },
+  {
+    id: 'conv-h007',
+    title: 'React Server Components deep dive',
+    summary: 'Explored RSC architecture, server/client component boundaries, data fetching patterns, streaming with Suspense, and migration strategies from Pages Router.',
+    model: 'Claude 3.5 Sonnet',
+    modelColor: 'bg-orange-400',
+    folder: 'Work',
+    folderId: 'folder-work',
+    messageCount: 18,
+    tokenCount: 6823,
+    createdAt: '2026-04-22T10:00:00Z',
+    updatedAt: '2026-04-22T11:45:00Z',
+    starred: true,
+    shared: true,
+    shareVisibility: 'public',
+    hasMemory: false,
+    hasAttachments: false,
+    tags: ['react', 'nextjs', 'frontend'],
+    status: 'active',
+  },
+  {
+    id: 'conv-h008',
+    title: 'Pricing strategy for SaaS',
+    summary: 'Analyzed freemium vs free trial models, seat-based vs usage-based pricing, value metric selection, and competitive pricing analysis for a developer tool.',
+    model: 'Gemini 1.5 Pro',
+    modelColor: 'bg-blue-400',
+    folder: 'Personal',
+    folderId: 'folder-personal',
+    messageCount: 12,
+    tokenCount: 4102,
+    createdAt: '2026-04-21T16:00:00Z',
+    updatedAt: '2026-04-21T17:10:00Z',
+    starred: false,
+    shared: false,
+    hasMemory: false,
+    hasAttachments: false,
+    tags: ['business', 'pricing', 'strategy'],
+    status: 'active',
+  },
+  {
+    id: 'conv-h009',
+    title: 'WebSocket vs SSE for streaming',
+    summary: 'Compared WebSocket and Server-Sent Events for real-time AI streaming, covering latency, reconnection, proxy compatibility, and implementation complexity.',
+    model: 'GPT-4o',
+    modelColor: 'bg-green-500',
+    folder: 'Research',
+    folderId: 'folder-research',
+    messageCount: 8,
+    tokenCount: 2910,
+    createdAt: '2026-04-21T09:00:00Z',
+    updatedAt: '2026-04-21T09:44:00Z',
+    starred: false,
+    shared: false,
+    hasMemory: false,
+    hasAttachments: false,
+    tags: ['networking', 'streaming', 'backend'],
+    status: 'archived',
+  },
+  {
+    id: 'conv-h010',
+    title: 'Write onboarding email sequence',
+    summary: 'Created a 5-email onboarding sequence for a developer tool — welcome, feature discovery, first success moment, social proof, and upgrade nudge.',
+    model: 'Claude 3.5 Sonnet',
+    modelColor: 'bg-orange-400',
+    folder: 'Personal',
+    folderId: 'folder-personal',
+    messageCount: 11,
+    tokenCount: 3560,
+    createdAt: '2026-04-20T14:00:00Z',
+    updatedAt: '2026-04-20T15:20:00Z',
+    starred: false,
+    shared: false,
+    hasMemory: false,
+    hasAttachments: false,
+    tags: ['writing', 'marketing', 'email'],
+    status: 'active',
+  },
+  {
+    id: 'conv-h011',
+    title: 'Terraform module for ECS',
+    summary: 'Built a reusable Terraform module for AWS ECS Fargate with ALB, auto-scaling, CloudWatch logging, secrets management, and IAM role patterns.',
+    model: 'GPT-4o',
+    modelColor: 'bg-green-500',
+    folder: 'Work',
+    folderId: 'folder-work',
+    messageCount: 24,
+    tokenCount: 9140,
+    createdAt: '2026-04-19T11:00:00Z',
+    updatedAt: '2026-04-19T13:30:00Z',
+    starred: false,
+    shared: false,
+    hasMemory: true,
+    hasAttachments: true,
+    tags: ['terraform', 'aws', 'devops'],
+    status: 'summarized',
+  },
+  {
+    id: 'conv-h012',
+    title: 'Explain attention mechanism',
+    summary: 'Detailed explanation of self-attention, multi-head attention, positional encoding, and how transformers process sequential data without recurrence.',
+    model: 'Gemini 1.5 Pro',
+    modelColor: 'bg-blue-400',
+    folder: 'Research',
+    folderId: 'folder-research',
+    messageCount: 15,
+    tokenCount: 5230,
+    createdAt: '2026-04-18T10:00:00Z',
+    updatedAt: '2026-04-18T11:20:00Z',
+    starred: false,
+    shared: true,
+    shareVisibility: 'public',
+    hasMemory: false,
+    hasAttachments: false,
+    tags: ['ai', 'transformers', 'research'],
+    status: 'active',
+  },
+];
+
+export default function ConversationHistoryScreen() {
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(ALL_CONVERSATIONS[0]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  return (
+    <div className="flex h-full overflow-hidden">
+      {/* Folder sidebar */}
+      <div className="hidden md:flex w-52 shrink-0 border-r border-border flex-col bg-card/50">
+        <FolderSidebar
+          selectedFolder={selectedFolder}
+          onSelectFolder={setSelectedFolder}
+          conversations={ALL_CONVERSATIONS}
+        />
+      </div>
+
+      {/* Conversation list */}
+      <div className={`flex flex-col min-w-0 border-r border-border bg-background ${selectedConversation ? 'hidden lg:flex lg:w-[420px] xl:w-[480px] shrink-0' : 'flex-1'}`}>
+        <ConversationList
+          conversations={ALL_CONVERSATIONS}
+          selectedFolder={selectedFolder}
+          selectedConversation={selectedConversation}
+          onSelectConversation={setSelectedConversation}
+          selectedIds={selectedIds}
+          onSelectionChange={setSelectedIds}
+        />
+      </div>
+
+      {/* Preview panel */}
+      <div className={`flex-1 min-w-0 ${selectedConversation ? 'flex' : 'hidden lg:flex'}`}>
+        {selectedConversation ? (
+          <ConversationPreview
+            conversation={selectedConversation}
+            onClose={() => setSelectedConversation(null)}
+          />
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
+            <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mb-4">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-muted-foreground">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </div>
+            <p className="text-sm font-medium text-muted-foreground">Select a conversation to preview</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">Click any conversation from the list</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Akansha | Virtual Assistant</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar">
+            <div class="logo">
+                <div class="logo-icon"></div>
+                <h2>Akansha</h2>
+            </div>
+            <ul class="nav-links">
+                <li class="active" data-tab="chat"><i data-lucide="message-square"></i> Chat</li>
+                <li data-tab="voice"><i data-lucide="mic"></i> Voice Call Mode</li>
+                <li data-tab="inbox"><i data-lucide="inbox"></i> Unified Inbox</li>
+                <li data-tab="tasks"><i data-lucide="check-square"></i> Tasks</li>
+                <li data-tab="memory"><i data-lucide="brain"></i> Memory</li>
+            </ul>
+            <div class="user-profile" style="margin-top: auto; display: flex; flex-direction: column; gap: 1rem;">
+                <button id="google-login-btn" class="google-btn">
+                    <i data-lucide="chrome"></i> Connect Google
+                </button>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <div class="status-dot" style="width: 10px; height: 10px; background: #22c55e; border-radius: 50%;"></div>
+                    <span>Connected</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            
+            <!-- Chat View (Default) -->
+            <section id="chat-view" class="view active-view">
+                <div class="avatar-container">
+                    <div class="avatar-core" id="akansha-avatar">
+                        <!-- Simulated 3D Avatar Area -->
+                        <div class="inner-glow"></div>
+                        <div class="eye left"></div>
+                        <div class="eye right"></div>
+                        <div class="mouth" id="avatar-mouth"></div>
+                    </div>
+                </div>
+
+                <div class="chat-area">
+                    <div class="messages" id="chat-messages">
+                        <div class="message akansha">
+                            <div class="bubble">Hello. I am Akansha. How can I assist you today?</div>
+                        </div>
+                    </div>
+                    <div class="input-area">
+                        <button class="icon-btn" title="Voice Input" id="mic-btn"><i data-lucide="mic"></i></button>
+                        <button class="icon-btn" title="Upload File"><i data-lucide="paperclip"></i></button>
+                        <input type="text" id="chat-input" placeholder="Message Akansha..." autocomplete="off">
+                        <button class="send-btn" id="send-btn"><i data-lucide="send"></i></button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Voice Call View -->
+            <section id="voice-view" class="view" style="justify-content: center; align-items: center;">
+                <div class="voice-call-interface">
+                    <div class="avatar-core large" id="akansha-voice-avatar">
+                        <div class="inner-glow"></div>
+                        <div class="eye left"></div>
+                        <div class="eye right"></div>
+                        <div class="mouth"></div>
+                    </div>
+                    
+                    <div class="visualizer" id="audio-visualizer">
+                        <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                    </div>
+
+                    <div class="voice-controls">
+                        <button class="call-btn stop" id="stop-listening-btn"><i data-lucide="phone-off"></i></button>
+                        <button class="call-btn start" id="start-listening-btn"><i data-lucide="mic"></i> Start Speaking</button>
+                    </div>
+
+                    <div class="voice-settings">
+                        <label>Voice Personality:</label>
+                        <select id="voice-select"></select>
+                        <select id="tone-select">
+                            <option value="friendly">Friendly & Warm</option>
+                            <option value="professional">Professional</option>
+                            <option value="calm">Calm & Soothing</option>
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Unified Inbox View -->
+            <section id="inbox-view" class="view">
+                <header class="view-header">
+                    <h2>Unified Inbox</h2>
+                    <p>AI-sorted messages from Telegram, Twitter, and Email.</p>
+                </header>
+                <div class="inbox-list" id="inbox-list">
+                    <!-- Dynamic Inbox Items -->
+                    <div class="inbox-empty">Loading messages...</div>
+                </div>
+            </section>
+
+            <!-- Tasks View -->
+            <section id="tasks-view" class="view">
+                <header class="view-header">
+                    <h2>Smart Tasks</h2>
+                    <p>Auto-extracted tasks and scheduled events.</p>
+                </header>
+                <div class="task-list" id="task-list">
+                    <!-- Dynamic Task Items -->
+                    <div class="task-empty">No pending tasks.</div>
+                </div>
+            </section>
+
+            <!-- Memory View -->
+            <section id="memory-view" class="view">
+                <header class="view-header">
+                    <h2>Core Memories</h2>
+                    <p>Long-term context Akansha has learned about you.</p>
+                </header>
+                <div class="memory-grid" id="memory-grid">
+                    <!-- Dynamic Memory Items -->
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+    <script>lucide.createIcons();</script>
+</body>
+</html>
