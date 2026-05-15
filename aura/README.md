@@ -374,3 +374,6 @@ The regression suite covers important behavior such as live information routing,
 - Browser and desktop automation are subject to focus, OS, browser, and permission limits.
 - Sensitive actions should require confirmation.
 - Voice recognition quality depends on browser support, microphone permission, language selection, and background noise.
+
+---
+*Built with ❤️ by the Akansha team.*
