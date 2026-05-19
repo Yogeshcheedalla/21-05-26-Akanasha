@@ -36,6 +36,82 @@ const TONE_ENERGY: Record<VoiceTone, number> = {
   calm: 0.06,
 };
 
+const PORTRAIT_VERTEX_SHADER = `
+  varying vec2 vUv;
+  uniform float uTime;
+  uniform float uSpeech;
+  uniform float uViseme;
+  uniform float uSmile;
+  uniform float uConcern;
+  uniform float uBlink;
+
+  float gaussian(vec2 uv, vec2 center, vec2 spread) {
+    vec2 delta = (uv - center) / spread;
+    return exp(-dot(delta, delta));
+  }
+
+  void main() {
+    vUv = uv;
+    vec3 p = position;
+    float mouth = gaussian(uv, vec2(0.5, 0.535), vec2(0.095, 0.024));
+    float upperLip = gaussian(uv, vec2(0.5, 0.56), vec2(0.11, 0.02));
+    float cheeks = gaussian(uv, vec2(0.5, 0.595), vec2(0.27, 0.07));
+    float eyes = gaussian(uv, vec2(0.5, 0.685), vec2(0.25, 0.035));
+    float jaw = gaussian(uv, vec2(0.5, 0.47), vec2(0.17, 0.07));
+    float side = sign(uv.x - 0.5);
+
+    p.z += mouth * 0.0;
+    p.y -= mouth * 0.0;
+    p.x += side * mouth * 0.0;
+    p.y += upperLip * (0.014 * uSmile - 0.014 * uConcern);
+    p.y += cheeks * (0.018 * uSmile - 0.012 * uConcern);
+    p.z += cheeks * (0.028 * uSmile);
+    p.y -= eyes * uBlink * 0.018;
+    p.z -= eyes * uBlink * 0.012;
+    p.y -= jaw * 0.0;
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  }
+`;
+
+const PORTRAIT_FRAGMENT_SHADER = `
+  varying vec2 vUv;
+  uniform sampler2D uMap;
+  uniform float uOpacity;
+  uniform float uSpeech;
+  uniform float uSmile;
+  uniform float uConcern;
+
+  void main() {
+    vec4 color = texture2D(uMap, vUv);
+    color.rgb += vec3(0.018, 0.01, 0.006) * uSmile;
+    color.rgb -= vec3(0.0, 0.008, 0.018) * uConcern;
+    color.rgb += vec3(0.01) * uSpeech;
+    color.a *= uOpacity;
+    gl_FragColor = color;
+  }
+`;
+
+function createPortraitMaterial(texture: THREE.Texture, opacity: number) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uMap: { value: texture },
+      uOpacity: { value: opacity },
+      uTime: { value: 0 },
+      uSpeech: { value: 0 },
+      uViseme: { value: 0 },
+      uSmile: { value: 0 },
+      uConcern: { value: 0 },
+      uBlink: { value: 0 },
+    },
+    vertexShader: PORTRAIT_VERTEX_SHADER,
+    fragmentShader: PORTRAIT_FRAGMENT_SHADER,
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false,
+  });
+}
+
 function HologramParticles({ color }: { color: string }) {
   const pointsRef = useRef<THREE.Points>(null);
   const geometry = useMemo(() => {
@@ -103,6 +179,8 @@ function HologramAvatar({
   const portraitRef = useRef<THREE.Group>(null);
   const auraRef = useRef<THREE.Mesh>(null);
   const pedestalRef = useRef<THREE.Mesh>(null);
+  const nextBlinkAtRef = useRef(0);
+  const blinkStartAtRef = useRef(-10);
   const loadedTexture = useLoader(THREE.TextureLoader, HUMAN_AVATAR_PATH);
   const activeEmotion = isListening ? listenerEmotion : emotion;
   const theme = EMOTION_THEME[activeEmotion];
@@ -116,21 +194,28 @@ function HologramAvatar({
     return loadedTexture;
   }, [loadedTexture]);
 
-  const planeMaterial = useMemo(
-    () =>
-      new THREE.MeshBasicMaterial({
-        map: portraitTexture,
-        toneMapped: false,
-        transparent: true,
-        opacity: 0.96,
-      }),
+  const portraitMaterials = useMemo(
+    () => [0.18, 0.22, 0.96, 0.22, 0.18].map((opacity) => createPortraitMaterial(portraitTexture, opacity)),
     [portraitTexture]
   );
 
   useFrame(({ clock, mouse }) => {
     const time = clock.getElapsedTime();
-    const speech = isSpeaking ? THREE.MathUtils.clamp(speakingVolume, 0, 1) : 0;
-    const mouthEnergy = isSpeaking ? THREE.MathUtils.clamp(viseme / 8, 0, 1) : 0;
+    const rawSpeech = isSpeaking ? THREE.MathUtils.clamp(speakingVolume, 0, 1) : 0;
+    const speech = rawSpeech > 0.08 ? rawSpeech : 0;
+    const mouthEnergy = speech > 0 ? THREE.MathUtils.clamp(viseme / 8, 0, 1) : 0;
+    if (!nextBlinkAtRef.current) {
+      nextBlinkAtRef.current = time + 1.2 + Math.random() * 2.8;
+    }
+    if (time >= nextBlinkAtRef.current) {
+      blinkStartAtRef.current = time;
+      nextBlinkAtRef.current = time + 1.8 + Math.random() * 3.4;
+    }
+    const blinkProgress = (time - blinkStartAtRef.current) / 0.16;
+    const blink =
+      blinkProgress >= 0 && blinkProgress <= 1 ? Math.sin(blinkProgress * Math.PI) : 0;
+    const smileTarget = activeEmotion === 'happy' ? 1 : voiceTone === 'friendly' && isSpeaking ? 0.32 : 0.12;
+    const concernTarget = activeEmotion === 'sad' ? 0.9 : activeEmotion === 'thinking' ? 0.35 : 0;
     const listenLift = isListening ? 0.025 : 0;
     const emotionTilt =
       activeEmotion === 'thinking' ? -0.025 : activeEmotion === 'surprised' ? 0.02 : activeEmotion === 'sad' ? -0.015 : 0;
@@ -149,10 +234,34 @@ function HologramAvatar({
       portraitRef.current.rotation.y = Math.sin(time * 0.35) * 0.018;
       portraitRef.current.children.forEach((child, index) => {
         child.position.z = -0.04 + index * 0.026 + Math.sin(time * 1.1 + index) * 0.006;
-        const material = (child as THREE.Mesh).material as THREE.MeshBasicMaterial;
-        material.opacity = index === 2 ? 0.9 : 0.16 + speech * 0.1;
       });
     }
+
+    portraitMaterials.forEach((material, index) => {
+      material.uniforms.uTime.value = time;
+      material.uniforms.uSpeech.value = THREE.MathUtils.lerp(
+        material.uniforms.uSpeech.value,
+        speech,
+        speech > 0 ? 0.28 : 0.72
+      );
+      material.uniforms.uViseme.value = THREE.MathUtils.lerp(
+        material.uniforms.uViseme.value,
+        mouthEnergy,
+        mouthEnergy > 0 ? 0.3 : 0.8
+      );
+      material.uniforms.uSmile.value = THREE.MathUtils.lerp(
+        material.uniforms.uSmile.value,
+        smileTarget,
+        0.055
+      );
+      material.uniforms.uConcern.value = THREE.MathUtils.lerp(
+        material.uniforms.uConcern.value,
+        concernTarget,
+        0.045
+      );
+      material.uniforms.uBlink.value = blink;
+      material.uniforms.uOpacity.value = index === 2 ? 0.96 : 0.15 + speech * 0.08;
+    });
 
     if (auraRef.current) {
       auraRef.current.scale.set(2.2 + speech * 0.12 + mouthEnergy * 0.04, 3.38 + speech * 0.16, 1);
@@ -186,7 +295,7 @@ function HologramAvatar({
             renderOrder={10 + index}
           >
             <planeGeometry args={[1, 1.36, 64, 64]} />
-            <primitive object={index === 2 ? planeMaterial : planeMaterial.clone()} attach="material" />
+            <primitive object={portraitMaterials[index]} attach="material" />
           </mesh>
         ))}
       </group>

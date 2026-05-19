@@ -87,10 +87,29 @@ class SpeakerProfile(Base):
     display_name = Column(String, index=True)
     relationship_to_owner = Column(String, nullable=True)
     access_level = Column(String, default="guest")  # owner | trusted | guest
+    closeness_level = Column(String, default="normal")  # close | normal | distant | new
+    communication_style = Column(String, nullable=True)
+    language_preference = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
+    context_profile_json = Column(Text, nullable=True)
+    conversation_summary = Column(Text, nullable=True)
+    mood_state = Column(String, nullable=True)
+    interaction_count = Column(Integer, default=0)
     last_intro_text = Column(Text, nullable=True)
     last_heard_text = Column(Text, nullable=True)
     voice_signature_json = Column(Text, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+
+class SpeakerInteraction(Base):
+    __tablename__ = "speaker_interactions"
+    id = Column(Integer, primary_key=True, index=True)
+    speaker_id = Column(Integer, nullable=True, index=True)
+    speaker_name = Column(String, index=True)
+    session_id = Column(String, index=True, default="default")
+    role = Column(String, index=True)  # user | assistant
+    content = Column(Text)
+    mood_state = Column(String, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
@@ -133,9 +152,53 @@ def ensure_speaker_columns():
             connection.execute(text("ALTER TABLE speaker_profiles ADD COLUMN last_heard_text TEXT"))
         if "voice_signature_json" not in existing_columns:
             connection.execute(text("ALTER TABLE speaker_profiles ADD COLUMN voice_signature_json TEXT"))
+        if "closeness_level" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_profiles ADD COLUMN closeness_level VARCHAR DEFAULT 'normal'"))
+        if "communication_style" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_profiles ADD COLUMN communication_style VARCHAR"))
+        if "language_preference" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_profiles ADD COLUMN language_preference VARCHAR"))
+        if "context_profile_json" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_profiles ADD COLUMN context_profile_json TEXT"))
+        if "conversation_summary" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_profiles ADD COLUMN conversation_summary TEXT"))
+        if "mood_state" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_profiles ADD COLUMN mood_state VARCHAR"))
+        if "interaction_count" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_profiles ADD COLUMN interaction_count INTEGER DEFAULT 0"))
 
 
 ensure_speaker_columns()
+
+
+def ensure_speaker_interaction_columns():
+    with engine.begin() as connection:
+        try:
+            column_rows = connection.execute(text("PRAGMA table_info(speaker_interactions)")).fetchall()
+        except Exception:
+            Base.metadata.create_all(bind=engine)
+            return
+
+        if not column_rows:
+            Base.metadata.create_all(bind=engine)
+            return
+
+        existing_columns = {row[1] for row in column_rows}
+        if "speaker_id" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_interactions ADD COLUMN speaker_id INTEGER"))
+        if "speaker_name" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_interactions ADD COLUMN speaker_name VARCHAR"))
+        if "session_id" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_interactions ADD COLUMN session_id VARCHAR DEFAULT 'default'"))
+        if "role" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_interactions ADD COLUMN role VARCHAR"))
+        if "content" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_interactions ADD COLUMN content TEXT"))
+        if "mood_state" not in existing_columns:
+            connection.execute(text("ALTER TABLE speaker_interactions ADD COLUMN mood_state VARCHAR"))
+
+
+ensure_speaker_interaction_columns()
 
 
 def ensure_chat_message_columns():

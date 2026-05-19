@@ -46,6 +46,7 @@ from .database import (
     UserProfile,
     IntegrationConnection,
     SpeakerProfile,
+    SpeakerInteraction,
 )
 from .ai_engine import generate_chat_stream, analyze_intent_and_memory
 from .automation import execute_desktop_command
@@ -137,6 +138,7 @@ class ChatRequest(BaseModel):
     language_preference: str | None = None
     attachments: list[dict] | None = None
     continue_from_message_id: int | None = None
+    speaker_profile: dict[str, Any] | None = None
 
 
 class ChatMessageSaveRequest(BaseModel):
@@ -262,7 +264,13 @@ class SpeakerProfileRequest(BaseModel):
     display_name: str
     relationship_to_owner: str | None = None
     access_level: str | None = None
+    closeness_level: str | None = None
+    communication_style: str | None = None
+    language_preference: str | None = None
     notes: str | None = None
+    context_profile: dict[str, Any] | None = None
+    conversation_summary: str | None = None
+    mood_state: str | None = None
     last_heard_text: str | None = None
     voice_signature: dict[str, Any] | None = None
 
@@ -332,18 +340,210 @@ def serialize_speaker_profile(profile: SpeakerProfile) -> dict[str, Any]:
             voice_signature = json.loads(profile.voice_signature_json)
         except json.JSONDecodeError:
             voice_signature = None
+    context_profile: dict[str, Any] | None = None
+    if profile.context_profile_json:
+        try:
+            context_profile = json.loads(profile.context_profile_json)
+        except json.JSONDecodeError:
+            context_profile = None
 
     return {
         "id": profile.id,
         "display_name": profile.display_name,
         "relationship_to_owner": profile.relationship_to_owner,
         "access_level": profile.access_level,
+        "closeness_level": profile.closeness_level or "normal",
+        "communication_style": profile.communication_style,
+        "language_preference": profile.language_preference,
         "notes": profile.notes,
+        "context_profile": context_profile,
+        "conversation_summary": profile.conversation_summary,
+        "mood_state": profile.mood_state,
+        "interaction_count": profile.interaction_count or 0,
         "last_intro_text": profile.last_intro_text,
         "last_heard_text": profile.last_heard_text,
         "voice_signature": voice_signature,
         "timestamp": profile.timestamp.isoformat() if profile.timestamp else None,
     }
+
+
+def _default_owner_speaker_profile(db: Session) -> dict[str, Any]:
+    profile = get_or_create_profile(db)
+    return {
+        "display_name": profile.full_name or "Yogesh",
+        "relationship_to_owner": "owner",
+        "access_level": "owner",
+        "closeness_level": "close",
+        "communication_style": "proactive close companion",
+        "language_preference": profile.voice_language or "telugu_english",
+        "notes": profile.bio or "Primary Akansha owner.",
+        "context_profile": {
+            "education": "B.Tech student",
+            "assistant_project": "Building Akansha as an autonomous voice, chat, automation, and memory assistant.",
+            "current_work_style": "Wants quick, accurate, relationship-aware, human-like responses.",
+        },
+        "conversation_summary": "Owner expects proactive support, memory, automation safety, and natural conversation.",
+    }
+
+
+def _chat_speaker_profile(req: ChatRequest, db: Session) -> dict[str, Any]:
+    if req.speaker_profile:
+        merged = {**_default_owner_speaker_profile(db), **req.speaker_profile}
+        if not merged.get("relationship_to_owner"):
+            merged["relationship_to_owner"] = "owner"
+        if not merged.get("access_level"):
+            merged["access_level"] = _speaker_access_level(merged.get("relationship_to_owner"))
+        if not merged.get("closeness_level"):
+            relationship = str(merged.get("relationship_to_owner") or "").lower()
+            merged["closeness_level"] = "close" if relationship in {"owner", "mother", "father"} else "normal"
+        recent = _recent_speaker_interactions(db, merged)
+        if recent:
+            merged["recent_interactions"] = recent
+        return merged
+    return _default_owner_speaker_profile(db)
+
+
+def _find_speaker_from_payload(db: Session, speaker_payload: dict[str, Any]) -> SpeakerProfile | None:
+    speaker_id = speaker_payload.get("id")
+    display_name = str(speaker_payload.get("display_name") or "").strip()
+
+    if isinstance(speaker_id, int):
+        speaker = db.query(SpeakerProfile).filter(SpeakerProfile.id == speaker_id).first()
+        if speaker:
+            return speaker
+    if display_name:
+        return db.query(SpeakerProfile).filter(SpeakerProfile.display_name.ilike(display_name)).first()
+    return None
+
+
+def _recent_speaker_interactions(db: Session, speaker_payload: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+    speaker = _find_speaker_from_payload(db, speaker_payload)
+    if not speaker:
+        return []
+
+    rows = (
+        db.query(SpeakerInteraction)
+        .filter(SpeakerInteraction.speaker_id == speaker.id)
+        .order_by(SpeakerInteraction.timestamp.desc(), SpeakerInteraction.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "role": row.role,
+            "content": (row.content or "")[:500],
+            "mood_state": row.mood_state,
+            "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+        }
+        for row in reversed(rows)
+    ]
+
+
+def _trim_summary(value: str, limit: int = 1800) -> str:
+    cleaned = " ".join((value or "").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[-limit:].lstrip(" .;,-")
+
+
+def _append_speaker_interaction(
+    db: Session,
+    speaker_payload: dict[str, Any],
+    session_id: str,
+    role: str,
+    content: str,
+    mood_state: str | None = None,
+) -> None:
+    relationship = str(speaker_payload.get("relationship_to_owner") or "").strip().lower()
+    if relationship == "owner":
+        return
+
+    speaker = _find_speaker_from_payload(db, speaker_payload)
+    if not speaker:
+        return
+
+    db.add(
+        SpeakerInteraction(
+            speaker_id=speaker.id,
+            speaker_name=speaker.display_name,
+            session_id=session_id or "default",
+            role=role,
+            content=content.strip()[:4000],
+            mood_state=(mood_state or speaker.mood_state or "neutral").strip().lower(),
+        )
+    )
+
+    if role == "assistant":
+        previous = speaker.conversation_summary or f"{speaker.display_name} is {speaker.relationship_to_owner or 'connected to Yogesh'}."
+        speaker.conversation_summary = _trim_summary(
+            f"{previous} Recent Akansha reply: {content.strip()[:260]}"
+        )
+        db.add(speaker)
+
+
+def _record_speaker_interaction(req: ChatRequest, db: Session, speaker_payload: dict[str, Any]) -> dict[str, Any]:
+    raw_speaker = req.speaker_profile or {}
+    speaker_id = raw_speaker.get("id")
+    display_name = str(speaker_payload.get("display_name") or "").strip()
+    relationship = str(speaker_payload.get("relationship_to_owner") or "").strip().lower()
+
+    if not display_name or relationship == "owner":
+        return speaker_payload
+
+    speaker = None
+    if isinstance(speaker_id, int):
+        speaker = db.query(SpeakerProfile).filter(SpeakerProfile.id == speaker_id).first()
+    if not speaker:
+        speaker = db.query(SpeakerProfile).filter(SpeakerProfile.display_name.ilike(display_name)).first()
+    if not speaker:
+        return speaker_payload
+
+    speaker.last_heard_text = req.message.strip()[:1000]
+    speaker.mood_state = (req.user_tone or raw_speaker.get("mood_state") or speaker.mood_state or "neutral").strip().lower()
+    speaker.interaction_count = int(speaker.interaction_count or 0) + 1
+
+    if speaker.closeness_level in {None, "", "new"} and speaker.interaction_count >= 3:
+        speaker.closeness_level = "normal"
+    if relationship == "friend" and speaker.closeness_level == "normal" and speaker.interaction_count >= 25:
+        speaker.closeness_level = "close"
+
+    db.add(speaker)
+    db.commit()
+    db.refresh(speaker)
+
+    speaker_payload["interaction_count"] = speaker.interaction_count or 0
+    speaker_payload["closeness_level"] = speaker.closeness_level or speaker_payload.get("closeness_level")
+    speaker_payload["mood_state"] = speaker.mood_state
+    speaker_payload["last_heard_text"] = speaker.last_heard_text
+    speaker_payload["id"] = speaker.id
+    _append_speaker_interaction(
+        db,
+        speaker_payload,
+        req.session_id,
+        "user",
+        req.message,
+        speaker.mood_state,
+    )
+    speaker_payload["recent_interactions"] = _recent_speaker_interactions(db, speaker_payload)
+    db.commit()
+    return speaker_payload
+
+
+def _record_assistant_speaker_interaction(
+    req: ChatRequest,
+    db: Session,
+    speaker_payload: dict[str, Any],
+    response_text: str,
+) -> None:
+    _append_speaker_interaction(
+        db,
+        speaker_payload,
+        req.session_id,
+        "assistant",
+        response_text,
+        speaker_payload.get("mood_state"),
+    )
+    db.commit()
 
 
 def _speaker_access_level(relationship: str | None) -> str:
@@ -357,6 +557,10 @@ def _speaker_access_level(relationship: str | None) -> str:
         "self": "owner",
         "me": "owner",
         "myself": "owner",
+        "teacher": "professor",
+        "mentor": "professor",
+        "college friend": "friend",
+        "classmate": "friend",
     }
     normalized = relationship_aliases.get(normalized, normalized)
     if normalized in {"owner", "self", "me", "myself"}:
@@ -3323,6 +3527,7 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks, db:
     db.commit()
 
     try:
+        speaker_context = _record_speaker_interaction(req, db, _chat_speaker_profile(req, db))
         # Generate Response
         response_generator = generate_chat_stream(
             db,
@@ -3333,6 +3538,7 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks, db:
             conversation_mode=req.conversation_mode,
             language_preference=req.language_preference,
             attachments=req.attachments,
+            speaker_profile=speaker_context,
         )
         response_text = "".join(list(response_generator))
         
@@ -3346,6 +3552,7 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks, db:
         )
         db.add(ai_msg)
         db.commit()
+        _record_assistant_speaker_interaction(req, db, speaker_context, response_text)
 
         # Background Task: Extract Memories & Tasks
         background_tasks.add_task(analyze_intent_and_memory, db, req.message, response_text)
@@ -3431,6 +3638,7 @@ async def chat_stream_endpoint(
     )
     db.add(user_msg)
     db.commit()
+    speaker_context = _record_speaker_interaction(req, db, _chat_speaker_profile(req, db))
 
     async def event_stream():
         response_text = ""
@@ -3444,6 +3652,7 @@ async def chat_stream_endpoint(
                 conversation_mode=req.conversation_mode,
                 language_preference=req.language_preference,
                 attachments=req.attachments,
+                speaker_profile=speaker_context,
             ):
                 response_text += chunk
                 yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
@@ -3457,6 +3666,7 @@ async def chat_stream_endpoint(
             )
             db.add(ai_msg)
             db.commit()
+            _record_assistant_speaker_interaction(req, db, speaker_context, response_text)
             background_tasks.add_task(analyze_intent_and_memory, db, req.message, response_text)
             yield f"data: {json.dumps({'type': 'done', 'content': response_text, 'user_message_id': user_msg.id, 'assistant_message_id': ai_msg.id})}\n\n"
         except Exception as exc:
@@ -3923,6 +4133,35 @@ def get_voice_speakers(db: Session = Depends(get_db)):
     return {"speakers": [serialize_speaker_profile(speaker) for speaker in speakers]}
 
 
+@app.get("/api/voice/speakers/{speaker_id}/interactions")
+def get_voice_speaker_interactions(speaker_id: int, db: Session = Depends(get_db)):
+    speaker = db.query(SpeakerProfile).filter(SpeakerProfile.id == speaker_id).first()
+    if not speaker:
+        raise HTTPException(status_code=404, detail="Speaker profile not found.")
+
+    rows = (
+        db.query(SpeakerInteraction)
+        .filter(SpeakerInteraction.speaker_id == speaker.id)
+        .order_by(SpeakerInteraction.timestamp.desc(), SpeakerInteraction.id.desc())
+        .limit(50)
+        .all()
+    )
+    return {
+        "speaker": serialize_speaker_profile(speaker),
+        "interactions": [
+            {
+                "id": row.id,
+                "role": row.role,
+                "content": row.content,
+                "mood_state": row.mood_state,
+                "session_id": row.session_id,
+                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+            }
+            for row in reversed(rows)
+        ],
+    }
+
+
 @app.post("/api/voice/speakers")
 def save_voice_speaker(req: SpeakerProfileRequest, db: Session = Depends(get_db)):
     display_name = req.display_name.strip()
@@ -3949,9 +4188,29 @@ def save_voice_speaker(req: SpeakerProfileRequest, db: Session = Depends(get_db)
     if not speaker:
         speaker = SpeakerProfile(display_name=display_name)
 
+    default_closeness = "close" if relationship in {"owner", "mother", "father"} else "new"
+    default_style = {
+        "owner": "proactive close companion",
+        "mother": "warm family care",
+        "father": "practical supportive guidance",
+        "friend": "casual Indian college style",
+        "professor": "formal academic respect",
+    }.get(relationship or "", "polite cautious guest")
+
     speaker.relationship_to_owner = relationship
     speaker.access_level = access_level
+    speaker.closeness_level = (req.closeness_level or speaker.closeness_level or default_closeness).strip().lower()
+    speaker.communication_style = (
+        req.communication_style or speaker.communication_style or default_style
+    ).strip() or None
+    speaker.language_preference = (req.language_preference or speaker.language_preference or "telugu_english").strip() or None
     speaker.notes = req.notes
+    if req.context_profile is not None:
+        speaker.context_profile_json = json.dumps(req.context_profile, ensure_ascii=False)
+    if req.conversation_summary is not None:
+        speaker.conversation_summary = req.conversation_summary.strip()
+    if req.mood_state is not None:
+        speaker.mood_state = req.mood_state.strip().lower() or None
     speaker.last_intro_text = (
         f"{display_name} is {relationship or 'a new speaker'} for Yogesh."
     )

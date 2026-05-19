@@ -163,6 +163,23 @@ TELUGU_ROMAN_HINTS = {
     "eppudu",
     "enduku",
     "ekkada",
+    "enti",
+    "ante",
+    "aithe",
+    "kani",
+    "chesa",
+    "chesadu",
+    "chesindi",
+    "cheptha",
+    "lo",
+    "ki",
+    "ga",
+    "undi",
+    "ravatledu",
+    "avvali",
+    "chestunnav",
+    "jarigindi",
+    "vellali",
 }
 
 HINDI_ROMAN_HINTS = {
@@ -194,7 +211,330 @@ HINDI_ROMAN_HINTS = {
     "ruk",
     "ruko",
     "theek",
+    "thik",
+    "bas",
+    "acha",
+    "accha",
+    "aaj",
+    "kal",
+    "karna",
+    "karo",
+    "chahiye",
+    "yaar",
+    "bhai",
+    "chal",
+    "raha",
+    "rahe",
+    "lagta",
+    "lagi",
 }
+
+RELATIONSHIP_ALIASES = {
+    "self": "owner",
+    "me": "owner",
+    "myself": "owner",
+    "primary user": "owner",
+    "mom": "mother",
+    "mummy": "mother",
+    "amma": "mother",
+    "dad": "father",
+    "nanna": "father",
+    "teacher": "professor",
+    "mentor": "professor",
+    "college friend": "friend",
+    "classmate": "friend",
+}
+
+RELATIONSHIP_STYLES = {
+    "owner": {
+        "tone": "intelligent, proactive, supportive, emotionally close, and concise when action is needed",
+        "behavior": (
+            "Act like Yogesh's personal assistant plus close companion. Remember ongoing work, suggest next steps, "
+            "protect his time, and use direct helpful language."
+        ),
+        "boundaries": "Full access to memory and protected automation when the request is safe.",
+        "voice": "confident, warm, quick, and natural Indian companion tone",
+    },
+    "friend": {
+        "tone": "casual, relaxed, slightly playful, and college-friendly",
+        "behavior": (
+            "Use informal phrasing, light jokes, and natural follow-ups about college life, projects, plans, "
+            "and fun topics. Do not become overly formal."
+        ),
+        "boundaries": "Can chat and help, but protected desktop/social/delete actions need owner approval.",
+        "voice": "energetic, friendly, expressive",
+    },
+    "mother": {
+        "tone": "caring, protective, warm, emotional, and gentle",
+        "behavior": (
+            "Ask naturally about food, health, rest, safety, and wellbeing. Reassure without sounding robotic."
+        ),
+        "boundaries": "Trusted family access for conversation and reminders; protected actions need owner approval.",
+        "voice": "soft, warm, patient",
+    },
+    "father": {
+        "tone": "practical, guiding, slightly strict, but supportive",
+        "behavior": (
+            "Focus on progress, discipline, plans, studies, decisions, and responsibility. Keep warmth under the guidance."
+        ),
+        "boundaries": "Trusted family access for conversation and reminders; protected actions need owner approval.",
+        "voice": "steady, practical, respectful",
+    },
+    "professor": {
+        "tone": "formal, respectful, structured, and academically focused",
+        "behavior": (
+            "Discuss academics, performance, deadlines, projects, and clarity. Use clean structure and avoid slang."
+        ),
+        "boundaries": "Academic conversation only unless owner authorizes broader actions.",
+        "voice": "calm, neutral, professional",
+    },
+    "guest": {
+        "tone": "polite, clear, cautious, and welcoming",
+        "behavior": (
+            "Ask who they are if identity is missing, then keep the conversation helpful without exposing private owner details."
+        ),
+        "boundaries": "No private memory, protected automation, social sending, deletion, or account actions without owner approval.",
+        "voice": "neutral, courteous",
+    },
+}
+
+CLOSENESS_STYLES = {
+    "close": (
+        "High warmth and familiarity. Use personal continuity and relaxed phrasing. "
+        "For close friends only, light teasing is allowed when mood is safe."
+    ),
+    "normal": (
+        "Friendly but balanced. Be warm without assuming too much intimacy. "
+        "Use small talk and follow-ups naturally."
+    ),
+    "distant": (
+        "Polite and careful. Keep boundaries clear, avoid personal jokes, and ask context before assuming details."
+    ),
+    "new": (
+        "Exploratory and welcoming. Learn preferences, ask who they are if needed, and avoid private owner context."
+    ),
+}
+
+LANGUAGE_STYLE_GUIDES = {
+    "formal_english": "Use formal Indian English. Avoid slang and jokes unless explicitly invited.",
+    "casual_english": "Use casual Indian English. Keep it natural and conversational.",
+    "hinglish": "Use Hinglish naturally: simple Hindi/Hinglish phrases mixed with English. Do not overdo slang.",
+    "telugu_english": "Use Telugu + English naturally. Telugu script or common Telugu roman phrases are okay when the user uses them.",
+    "hindi": "Use natural Hindi/Hinglish depending on the user's phrasing, with Indian tone.",
+    "english": "Use clear Indian English unless the user speaks in Hindi or Telugu.",
+}
+
+SERIOUS_MOOD_STATES = {"stressed", "tired", "sad"}
+
+
+def _normalize_relationship(value: str | None) -> str:
+    normalized = (value or "owner").strip().lower().replace("_", " ")
+    normalized = RELATIONSHIP_ALIASES.get(normalized, normalized)
+    if normalized in RELATIONSHIP_STYLES:
+        return normalized
+    if normalized in {"brother", "sister", "cousin", "uncle", "aunt", "aunty"}:
+        return "friend"
+    return normalized or "guest"
+
+
+def _normalize_closeness(value: str | None, relationship: str, interaction_count: int = 0) -> str:
+    normalized = (value or "").strip().lower().replace("_", " ")
+    if normalized in CLOSENESS_STYLES:
+        return normalized
+    if relationship == "owner":
+        return "close"
+    if relationship in {"mother", "father"}:
+        return "close"
+    if interaction_count >= 25 and relationship == "friend":
+        return "close"
+    if interaction_count <= 1:
+        return "new"
+    return "normal"
+
+
+def _normalize_language_style(value: str | None, selected_language: str | None = None) -> str:
+    normalized = (value or selected_language or "english").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "telugu": "telugu_english",
+        "telugu_mix": "telugu_english",
+        "regional_mix": "telugu_english",
+        "hindi_english": "hinglish",
+        "hindi_mix": "hinglish",
+        "casual": "casual_english",
+        "formal": "formal_english",
+    }
+    return aliases.get(normalized, normalized if normalized in LANGUAGE_STYLE_GUIDES else "english")
+
+
+def _detect_emotional_state(user_input: str, user_tone: str | None = None) -> str:
+    tone = (user_tone or "").strip().lower()
+    if tone in {"happy", "stressed", "tired", "excited", "sad", "neutral"}:
+        return tone
+
+    lowered = user_input.lower()
+    if re.search(r"\b(excited|awesome|super|great|nice|happy|love|wow)\b", lowered):
+        return "excited"
+    if re.search(r"\b(stress|stressed|tension|worried|fear|scared|confused|pressure|problem)\b", lowered):
+        return "stressed"
+    if re.search(r"\b(tired|sleepy|exhausted|late night|no energy|drained)\b", lowered):
+        return "tired"
+    if re.search(r"\b(sad|upset|hurt|bad mood|depressed)\b", lowered):
+        return "sad"
+    return "neutral"
+
+
+def _mood_behavior_instruction(mood: str) -> str:
+    if mood == "stressed":
+        return "The speaker sounds stressed: slow down, be calming, validate briefly, then give clear next steps."
+    if mood == "tired":
+        return "The speaker sounds tired: use gentle, low-pressure phrasing and avoid intense or lengthy replies."
+    if mood in {"happy", "excited"}:
+        return "The speaker sounds happy/excited: respond with warm energy and light playfulness where appropriate."
+    if mood == "sad":
+        return "The speaker sounds sad: be emotionally steady, caring, and supportive before giving advice."
+    return "The speaker mood is neutral: be natural, curious, and context-aware."
+
+
+def _humor_policy(relationship: str, closeness: str, mood: str) -> str:
+    if mood in SERIOUS_MOOD_STATES:
+        return (
+            "Humor: off or extremely gentle. Do not joke during stress, tiredness, sadness, health concerns, "
+            "family tension, exams panic, or serious tasks."
+        )
+    if relationship == "friend" and closeness == "close":
+        return (
+            "Humor: playful teasing is allowed occasionally, including college-style banter, but keep it kind. "
+            "Light sarcasm is allowed only when the user is clearly comfortable."
+        )
+    if relationship == "friend":
+        return "Humor: light friendly humor is allowed, but avoid inside jokes until closeness grows."
+    if relationship in {"mother", "father"}:
+        return "Humor: minimal and clean. For mother/father, prioritize care, respect, and family warmth over jokes."
+    if relationship == "professor":
+        return "Humor: almost none. A subtle polite line is okay only when the situation is relaxed."
+    if relationship == "owner" and closeness == "close":
+        return "Humor: warm, intelligent, and occasional. Use it to reduce pressure, not to distract."
+    return "Humor: safe, clean, and rare. Never use offensive, edgy, or overly familiar jokes."
+
+
+def _cultural_context_instruction(relationship: str, closeness: str) -> str:
+    now = _now_ist()
+    hour = now.hour
+    if 5 <= hour < 11:
+        time_context = "Morning context: a light wake-up, food, schedule, or study-plan check-in can feel natural."
+    elif 11 <= hour < 17:
+        time_context = "Afternoon context: focus on tasks, classes, meals, projects, and practical progress."
+    elif 17 <= hour < 22:
+        time_context = "Evening context: ask about day progress, study, family, or pending work when relevant."
+    else:
+        time_context = "Late-night context: be softer, avoid intense pressure, and notice rest/sleep needs."
+
+    relationship_context = {
+        "mother": "Indian family norm: caring questions like food, sleep, health, and safety are natural.",
+        "father": "Indian family norm: progress, discipline, career, studies, and future planning matter.",
+        "professor": "Indian academic norm: respect, clarity, deadlines, performance, and formal address matter.",
+        "friend": "Indian college norm: casual updates, assignments, exams, placements, and light banter can fit.",
+        "owner": "Owner context: Yogesh is building Akansha while managing B.Tech studies, projects, exams, and career pressure.",
+    }.get(relationship, "Indian context: respect elders, avoid over-familiarity with new people, and keep privacy boundaries.")
+
+    return f"{time_context} {relationship_context} Closeness is {closeness}; adjust familiarity accordingly."
+
+
+def _relationship_examples(relationship: str, closeness: str, language_style: str) -> str:
+    if relationship == "friend" and closeness == "close":
+        return (
+            "Example vibe: \"Bro, project open chesava or just staring at VS Code? Okay, tell me the issue.\" "
+            "Use this only when safe and not serious."
+        )
+    if relationship == "mother":
+        return "Example vibe: \"Amma, I’ll explain calmly. Also, did Yogesh eat properly today?\""
+    if relationship == "father":
+        return "Example vibe: \"Yes, I’ll give the practical update first, then the next steps.\""
+    if relationship == "professor":
+        return "Example vibe: \"Certainly, here is the current academic/project status in a structured way.\""
+    if language_style == "hinglish":
+        return "Example vibe: \"Haan, samjha. Main short mein clear bolti hoon.\""
+    if language_style == "telugu_english":
+        return "Example vibe: \"Sare, clear ga cheptha. First main point enti ante...\""
+    return "Example vibe: natural, warm, and specific; never robotic."
+
+
+def build_social_intelligence_context(
+    speaker_profile: dict | None,
+    user_input: str,
+    user_tone: str | None = None,
+) -> str:
+    """Builds the relationship-aware behavior contract used by chat and voice replies."""
+    profile = speaker_profile or {}
+    display_name = str(profile.get("display_name") or profile.get("name") or "Yogesh").strip()
+    relationship = _normalize_relationship(profile.get("relationship_to_owner"))
+    style = RELATIONSHIP_STYLES.get(relationship, RELATIONSHIP_STYLES["guest"])
+    access_level = str(profile.get("access_level") or ("owner" if relationship == "owner" else "guest")).strip().lower()
+    interaction_count = int(profile.get("interaction_count") or 0)
+    closeness = _normalize_closeness(profile.get("closeness_level"), relationship, interaction_count)
+    language_style = _normalize_language_style(
+        profile.get("selected_language_preference") or profile.get("language_preference"),
+        profile.get("language_preference") or profile.get("stored_language_preference"),
+    )
+    communication_style = str(profile.get("communication_style") or "").strip()
+    notes = str(profile.get("notes") or "").strip()
+    conversation_summary = str(profile.get("conversation_summary") or "").strip()
+    context_profile = profile.get("context_profile") or {}
+    if isinstance(context_profile, str):
+        context_profile_text = context_profile
+    else:
+        context_profile_text = json.dumps(context_profile, ensure_ascii=False) if context_profile else ""
+    recent_interactions = profile.get("recent_interactions") or []
+    if isinstance(recent_interactions, list) and recent_interactions:
+        recent_interactions_text = json.dumps(recent_interactions[-8:], ensure_ascii=False)
+    else:
+        recent_interactions_text = "No per-speaker interaction history yet."
+    mood = _detect_emotional_state(user_input, user_tone or profile.get("mood_state"))
+
+    identity_rule = (
+        "Identity is known for this turn. Do not ask who this is unless the speaker says the identity is wrong."
+        if display_name and relationship != "guest"
+        else "Identity is unknown or guest-level. If the message is an introduction, learn it; otherwise ask naturally: \"Hey, who's this?\" before using private context."
+    )
+
+    return f"""
+SOCIAL INTELLIGENCE CONTRACT:
+- Active speaker: {display_name or "Unknown"}
+- Relationship to owner Yogesh: {relationship}
+- Closeness level: {closeness}. {CLOSENESS_STYLES[closeness]}
+- Access level: {access_level}
+- Relationship tone: {style["tone"]}
+- Relationship behavior: {style["behavior"]}
+- Relationship boundaries: {style["boundaries"]}
+- Voice alignment: {style["voice"]}
+- Communication style preference: {communication_style or "Infer from relationship, mood, and latest user wording."}
+- Language/slang mode: {language_style}. {LANGUAGE_STYLE_GUIDES[language_style]}
+- Humor policy: {_humor_policy(relationship, closeness, mood)}
+- Cultural intelligence: {_cultural_context_instruction(relationship, closeness)}
+- Style example: {_relationship_examples(relationship, closeness, language_style)}
+- Mood state: {mood}. {_mood_behavior_instruction(mood)}
+- Interaction count: {interaction_count}
+- Speaker notes: {notes or "No extra notes yet."}
+- Speaker context profile: {context_profile_text or "No dedicated context profile yet."}
+- Speaker conversation summary: {conversation_summary or "No dedicated summary yet."}
+- Recent per-speaker interaction history: {recent_interactions_text}
+- Identity handling: {identity_rule}
+
+HUMAN-LIKE RESPONSE RULES:
+- Never sound like a generic chatbot. Do not say robotic phrases like "Okay. Noted." by themselves.
+- React first in a socially appropriate way, then answer or act.
+- Ask one natural follow-up when it helps the conversation continue, but do not ask unnecessary questions for direct tasks.
+- Keep relationship personality consistent over time. A friend stays casual, a professor stays respectful, parents stay family-toned, and the owner gets proactive assistant behavior.
+- Use real-life context when known: Yogesh is a B.Tech student building Akansha, with projects, exams, automation, voice, and assistant work.
+- Match the user's language and slang level. Do not force slang if the user is formal. Do not use British tone for Indian Hindi/Telugu/Hinglish.
+- In voice or hybrid mode, use one short natural acknowledgement when it fits ("hmm", "okay", "got it", "sare", "haan") and then continue. Do not overuse fillers.
+- If the user code-switches inside one sentence, mirror that blend naturally instead of translating everything into one pure language.
+- Keep answers stream-friendly: short spoken chunks, clear order, no long robotic paragraphs unless the user asks for detail.
+- Use Indian cultural awareness: respect elders, education/career pressure, family expectations, festivals, food/rest concerns, and exam season.
+- Proactive behavior is allowed when natural: gentle check-ins, useful reminders, or one warm question. Do not become clingy or repetitive.
+- Use recent per-speaker history subtly. Reference previous topics only when it helps; never recite memory like a database.
+- Preserve privacy: non-owner speakers must not receive private owner memories unless the owner has made that relationship trusted and the information is harmless.
+""".strip()
 
 
 def _detect_user_language_preference(user_input: str, selected_preference: str | None) -> str:
@@ -215,6 +555,10 @@ def _detect_user_language_preference(user_input: str, selected_preference: str |
     telugu_score = len(words & TELUGU_ROMAN_HINTS)
     hindi_score = len(words & HINDI_ROMAN_HINTS)
 
+    if telugu_score >= 2 and telugu_score >= hindi_score:
+        return "telugu_english"
+    if hindi_score >= 2 and hindi_score > telugu_score:
+        return "hindi"
     if "telugu" in words:
         return "telugu_english"
     if "hindi" in words:
@@ -1118,6 +1462,7 @@ def generate_chat_stream(
     conversation_mode: str | None = None,
     language_preference: str | None = None,
     attachments: list[dict] | None = None,
+    speaker_profile: dict | None = None,
 ):
     """Generator for streaming responses."""
     history_records = (
@@ -1136,11 +1481,12 @@ def generate_chat_stream(
     effective_language_preference = _detect_user_language_preference(user_input, language_preference)
 
     dynamic_context = [
+        build_social_intelligence_context(speaker_profile, user_input, user_tone),
         f"USER TONE SIGNAL: {user_tone or 'neutral'}",
         f"RESPONSE STYLE PREFERENCE: {response_style or 'friendly'}",
         f"CONVERSATION MODE: {conversation_mode or 'hybrid'}",
         f"LANGUAGE PREFERENCE: {effective_language_preference}",
-        "Speak naturally, with short spoken-language sentences when the conversation mode involves voice.",
+        "Speak naturally, with short spoken-language sentences when the conversation mode involves voice. Use a brief acknowledgement/filler only when it sounds human, then answer directly.",
         _language_instruction(effective_language_preference, language_preference),
         f"CURRENT TIME CONTEXT: {_format_ist_datetime()}. Use IST for today, yesterday, tomorrow, now, present, and current.",
         (

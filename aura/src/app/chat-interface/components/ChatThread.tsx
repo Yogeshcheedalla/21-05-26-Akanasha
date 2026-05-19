@@ -38,6 +38,12 @@ import {
 } from '@/lib/plannerCommands';
 import { isAutomationIntent, normalizeAutomationPrompt } from '@/lib/automationCommands';
 import { deleteSessionTitle } from '@/hooks/chatSessionTitles';
+import {
+  claimAkanshaAudio,
+  hardCancelBrowserSpeech,
+  releaseAkanshaAudio,
+  settleBrowserSpeechCancel,
+} from '@/lib/audioPlaybackGuard';
 
 export interface Message {
   id: string;
@@ -313,6 +319,8 @@ export default function ChatThread({
   const activeSessionIdRef = useRef(sessionId);
   const bottomRef = useRef<HTMLDivElement>(null);
   const speechRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const chatAudioOwnerIdRef = useRef(`chat-${Math.random().toString(36).slice(2)}`);
+  const chatSpeechGenerationRef = useRef(0);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const micStoppedManuallyRef = useRef(false);
   const voiceEnabledRef = useRef(false);
@@ -386,10 +394,25 @@ export default function ChatThread({
   }, []);
 
   // Text-to-speech
+  const stopChatSpeech = useCallback(() => {
+    chatSpeechGenerationRef.current += 1;
+    speechRef.current = null;
+    hardCancelBrowserSpeech();
+    setIsSpeaking(false);
+    setCurrentEmotion('neutral');
+  }, []);
+
+  const claimChatAudio = useCallback(() => {
+    claimAkanshaAudio(chatAudioOwnerIdRef.current, stopChatSpeech);
+  }, [stopChatSpeech]);
+
   const speak = useCallback(
-    (text: string) => {
+    async (text: string) => {
       if (!voiceEnabled || typeof window === 'undefined') return;
-      window.speechSynthesis?.cancel();
+      claimChatAudio();
+      stopChatSpeech();
+      await settleBrowserSpeechCancel();
+      const speechGeneration = ++chatSpeechGenerationRef.current;
       const plainText = text
         .replace(/```[\s\S]*?```/g, 'code block')
         .replace(/\*\*/g, '')
@@ -425,21 +448,24 @@ export default function ChatThread({
       );
       if (femaleVoice) utterance.voice = femaleVoice;
       utterance.onstart = () => {
+        if (speechGeneration !== chatSpeechGenerationRef.current || speechRef.current !== utterance) return;
         setIsSpeaking(true);
         setCurrentEmotion('speaking');
       };
       utterance.onend = () => {
+        if (speechGeneration !== chatSpeechGenerationRef.current || speechRef.current !== utterance) return;
         setIsSpeaking(false);
         setCurrentEmotion('neutral');
       };
       utterance.onerror = () => {
+        if (speechGeneration !== chatSpeechGenerationRef.current || speechRef.current !== utterance) return;
         setIsSpeaking(false);
         setCurrentEmotion('neutral');
       };
       speechRef.current = utterance;
       window.speechSynthesis.speak(utterance);
     },
-    [voiceEnabled]
+    [claimChatAudio, stopChatSpeech, voiceEnabled]
   );
 
   // Speech-to-text
@@ -522,10 +548,9 @@ export default function ChatThread({
 
         const heardText = `${finalTranscript} ${interimTranscript}`.trim();
         if (heardText && (isSpeakingRef.current || isStreamingRef.current)) {
-          window.speechSynthesis?.cancel();
+          stopChatSpeech();
           activeChatAbortRef.current?.abort();
           activeChatAbortRef.current = null;
-          setIsSpeaking(false);
           setIsStreaming(false);
           setStreamingContent('');
           setCurrentEmotion('thinking');
@@ -674,7 +699,7 @@ export default function ChatThread({
         })
         .catch((error) => console.error('Failed to persist planner assistant message:', error));
     },
-    [selectedModel]
+    [selectedModel, stopChatSpeech]
   );
 
   const handleSend = useCallback(
@@ -686,8 +711,7 @@ export default function ChatThread({
       const shouldSpeakReply = source === 'voice';
       activeChatAbortRef.current?.abort();
       activeChatAbortRef.current = null;
-      window.speechSynthesis?.cancel();
-      setIsSpeaking(false);
+      stopChatSpeech();
       setStreamingContent('');
       setIsStreaming(false);
       const detectedEmotion = detectEmotion(content);
@@ -1026,20 +1050,19 @@ export default function ChatThread({
 
       void streamResponse();
     },
-    [activeBranchFromId, addAssistantMessage, messages, selectedModel, simulateStreaming, speak]
+    [activeBranchFromId, addAssistantMessage, messages, selectedModel, simulateStreaming, speak, stopChatSpeech]
   );
 
   const stopActiveResponse = useCallback(() => {
     activeChatAbortRef.current?.abort();
     activeChatAbortRef.current = null;
-    window.speechSynthesis?.cancel();
-    setIsSpeaking(false);
+    stopChatSpeech();
     setIsStreaming(false);
     setStreamingContent('');
     setStreamingAfterMessageId(null);
     setCurrentEmotion('neutral');
     toast.info('Stopped. You can type or attach a screenshot now.');
-  }, []);
+  }, [stopChatSpeech]);
 
   useEffect(() => {
     sendFromVoiceRef.current = (content: string) => handleSend(content, undefined, 'voice');
@@ -1064,10 +1087,11 @@ export default function ChatThread({
 
   useEffect(() => {
     return () => {
+      releaseAkanshaAudio(chatAudioOwnerIdRef.current);
       activeChatAbortRef.current?.abort();
-      window.speechSynthesis?.cancel();
+      stopChatSpeech();
     };
-  }, []);
+  }, [stopChatSpeech]);
 
   const handleShare = () => {
     navigator.clipboard.writeText('https://akansha.ai/share/conv-abc123');

@@ -57,7 +57,9 @@ type AssistantMode = 'text' | 'voice' | 'hybrid';
 type AssistantEmotion = 'happy' | 'neutral' | 'thinking' | 'sad' | 'surprised';
 
 function isAlertReminderIntent(text: string) {
-  return /\b(alert|alarm|reminder|remainder|notify|notification|pop\s*up|popup|remind me)\b/i.test(text);
+  return /\b(alert|alarm|reminder|remainder|notify|notification|pop\s*up|popup|remind me)\b/i.test(
+    text
+  );
 }
 
 interface ProfileResponse {
@@ -179,7 +181,19 @@ interface SpeakerProfileData {
   display_name: string;
   relationship_to_owner: string | null;
   access_level: SpeakerAccessLevel;
+  closeness_level?: 'close' | 'normal' | 'distant' | 'new' | null;
+  communication_style?: string | null;
+  language_preference?:
+    | VoiceLanguagePreference
+    | 'hinglish'
+    | 'formal_english'
+    | 'casual_english'
+    | null;
   notes: string | null;
+  context_profile?: Record<string, unknown> | null;
+  conversation_summary?: string | null;
+  mood_state?: string | null;
+  interaction_count?: number;
   last_intro_text: string | null;
   last_heard_text: string | null;
   voice_signature?: {
@@ -230,6 +244,9 @@ const SPEAKER_RELATIONSHIP_ALIASES: Record<string, string> = {
   self: 'owner',
   me: 'owner',
   myself: 'owner',
+  teacher: 'professor',
+  mentor: 'professor',
+  classmate: 'friend',
 };
 
 function detectUserTone(text: string): AssistantEmotion {
@@ -262,9 +279,7 @@ function extractSpeakerIntro(text: string) {
   const relationshipAlternates =
     'mother|mom|mummy|amma|father|dad|nanna|brother|sister|wife|husband|friend|owner|self|me|myself|teacher|colleague|cousin|uncle|aunty|aunt|guest';
 
-  const relationshipMatch = lowered.match(
-    new RegExp(`\\b(${relationshipAlternates})\\b`, 'i')
-  );
+  const relationshipMatch = lowered.match(new RegExp(`\\b(${relationshipAlternates})\\b`, 'i'));
   const relationshipWords = new Set([
     'mother',
     'mom',
@@ -301,7 +316,9 @@ function extractSpeakerIntro(text: string) {
   for (const pattern of namePatterns) {
     const match = normalized.match(pattern);
     if (match?.[1]) {
-      const rawName = match[1].replace(/\b(and|for|to|with|relationship|relation)\b.*$/i, '').trim();
+      const rawName = match[1]
+        .replace(/\b(and|for|to|with|relationship|relation)\b.*$/i, '')
+        .trim();
       const rawNameLower = rawName.toLowerCase().replace(/\s+/g, ' ');
       const shouldKeepRelationshipWordAsName = rawNameLower === 'amma' || /yogesh/i.test(rawName);
       displayName = shouldKeepRelationshipWordAsName
@@ -335,6 +352,136 @@ function speakerAccessLabel(accessLevel: SpeakerAccessLevel) {
   if (accessLevel === 'owner') return 'full access';
   if (accessLevel === 'trusted') return 'trusted access';
   return 'guest access';
+}
+
+function buildSpeakerContextProfile(relationship: string | null, inputMode: 'voice' | 'text') {
+  const normalized = relationship || 'guest';
+  const base = {
+    owner: 'Yogesh',
+    onboarding_source: inputMode,
+    expected_behavior: 'Relationship-aware, emotionally natural, privacy-safe conversation.',
+  };
+
+  if (normalized === 'owner') {
+    return {
+      ...base,
+      role: 'Primary user',
+      priorities: [
+        'automation accuracy',
+        'fast answers',
+        'B.Tech studies',
+        'Akansha project progress',
+      ],
+    };
+  }
+  if (normalized === 'mother') {
+    return {
+      ...base,
+      role: 'Mother',
+      priorities: ['health', 'food', 'rest', 'wellbeing', 'family warmth'],
+    };
+  }
+  if (normalized === 'father') {
+    return {
+      ...base,
+      role: 'Father',
+      priorities: ['discipline', 'progress', 'studies', 'future planning'],
+    };
+  }
+  if (normalized === 'professor') {
+    return {
+      ...base,
+      role: 'Professor or mentor',
+      priorities: ['academics', 'project status', 'performance', 'clear structure'],
+    };
+  }
+  if (normalized === 'friend') {
+    return {
+      ...base,
+      role: 'Friend',
+      priorities: ['casual talk', 'college updates', 'fun topics', 'light jokes'],
+    };
+  }
+
+  return {
+    ...base,
+    role: normalized,
+    priorities: ['polite conversation', 'limited access', 'owner privacy'],
+  };
+}
+
+function defaultClosenessForRelationship(relationship: string | null) {
+  if (relationship === 'owner' || relationship === 'mother' || relationship === 'father') {
+    return 'close';
+  }
+  return 'new';
+}
+
+function defaultCommunicationStyleForRelationship(relationship: string | null) {
+  if (relationship === 'owner') return 'proactive close companion';
+  if (relationship === 'mother') return 'warm Indian family care';
+  if (relationship === 'father') return 'practical supportive guidance';
+  if (relationship === 'friend') return 'casual Indian college style';
+  if (relationship === 'professor') return 'formal academic respect';
+  return 'polite cautious guest';
+}
+
+function voiceToneForSpeaker(speaker: SpeakerProfileData | null, fallback: VoiceTone): VoiceTone {
+  const relationship = speaker?.relationship_to_owner;
+  if (relationship === 'mother') return 'calm';
+  if (relationship === 'father') return 'professional';
+  if (relationship === 'professor') return 'professional';
+  if (relationship === 'friend') return 'energetic';
+  return fallback;
+}
+
+function buildAssistantSpeakerPayload(
+  speaker: SpeakerProfileData | null,
+  fallbackName: string | undefined,
+  userEmotion: AssistantEmotion,
+  selectedLanguage: VoiceLanguagePreference
+) {
+  if (speaker) {
+    return {
+      id: speaker.id,
+      display_name: speaker.display_name,
+      relationship_to_owner: speaker.relationship_to_owner,
+      access_level: speaker.access_level,
+      closeness_level:
+        speaker.closeness_level || defaultClosenessForRelationship(speaker.relationship_to_owner),
+      communication_style:
+        speaker.communication_style ||
+        defaultCommunicationStyleForRelationship(speaker.relationship_to_owner),
+      language_preference: selectedLanguage,
+      stored_language_preference: speaker.language_preference,
+      notes: speaker.notes,
+      context_profile: speaker.context_profile,
+      conversation_summary: speaker.conversation_summary,
+      mood_state: userEmotion,
+      interaction_count: speaker.interaction_count || 0,
+      last_heard_text: speaker.last_heard_text,
+      selected_language_preference: selectedLanguage,
+    };
+  }
+
+  return {
+    display_name: fallbackName || 'Yogesh',
+    relationship_to_owner: 'owner',
+    access_level: 'owner',
+    closeness_level: 'close',
+    communication_style: 'proactive close companion',
+    language_preference: selectedLanguage,
+    notes: 'Primary Akansha owner using chat/session identity.',
+    context_profile: {
+      education: 'B.Tech student',
+      project:
+        'Building Akansha as a voice, chat, automation, memory, and relationship-aware assistant.',
+    },
+    conversation_summary: 'Owner wants fast, accurate, emotionally natural and proactive help.',
+    mood_state: userEmotion,
+    interaction_count: 0,
+    selected_language_preference: selectedLanguage,
+  };
 }
 
 function buildVoiceSignature(
@@ -381,8 +528,18 @@ function shouldChallengeSpeakerIdentity(
   speaker: SpeakerProfileData | null,
   currentFrequency: VoiceFrequencySignature | null
 ) {
+  if (!speaker) return false;
+  if (speaker.access_level === 'owner' || speaker.relationship_to_owner === 'owner') {
+    return false;
+  }
+
   const savedFrequency = speaker?.voice_signature?.audio_frequency;
-  return speakerFrequencyDistance(savedFrequency, currentFrequency) > 0.72;
+  if (!savedFrequency || !currentFrequency) return false;
+  if ((savedFrequency.sampleCount ?? 0) < 20 || (currentFrequency.sampleCount ?? 0) < 60) {
+    return false;
+  }
+
+  return speakerFrequencyDistance(savedFrequency, currentFrequency) > 1.1;
 }
 
 const AssistantAvatarStage = dynamic(
@@ -408,6 +565,8 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
     isSpeaking,
     transcript,
     finalTranscript,
+    voiceNotice,
+    voiceNoticeId,
     speakingVolume,
     voiceFrequencySignature,
     viseme,
@@ -428,6 +587,7 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
     stopSpeaking,
     previewSelectedVoice,
     clearTranscript,
+    clearVoiceNotice,
   } = useVoice();
 
   const [assistantMode, setAssistantMode] = useState<AssistantMode>('hybrid');
@@ -457,12 +617,14 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
   const [avatarFullscreen, setAvatarFullscreen] = useState(false);
   const conversationRef = useRef<HTMLDivElement>(null);
   const voiceTurnTimerRef = useRef<number | null>(null);
+  const lastVoiceNoticeIdRef = useRef(0);
   const spokenOffsetRef = useRef(0);
   const pendingPlannerRef = useRef<PlannerCommand | null>(null);
   const plannerContextRef = useRef('');
   const speakerProfilesRef = useRef<SpeakerProfileData[]>([]);
   const activeSpeakerRef = useRef<SpeakerProfileData | null>(null);
   const activeResponseAbortRef = useRef<AbortController | null>(null);
+  const lastIdentityChallengeAtRef = useRef(0);
 
   useEffect(() => {
     speakerProfilesRef.current = speakerProfiles;
@@ -571,11 +733,14 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
       window.clearTimeout(voiceTurnTimerRef.current);
     }
 
-    voiceTurnTimerRef.current = window.setTimeout(() => {
-      void handleConversationTurn(settledTranscript, 'voice');
-      clearTranscript();
-      voiceTurnTimerRef.current = null;
-    }, finalTranscript.trim() ? 520 : 950);
+    voiceTurnTimerRef.current = window.setTimeout(
+      () => {
+        void handleConversationTurn(settledTranscript, 'voice');
+        clearTranscript();
+        voiceTurnTimerRef.current = null;
+      },
+      finalTranscript.trim() ? 760 : 1300
+    );
 
     return () => {
       if (voiceTurnTimerRef.current) {
@@ -584,6 +749,45 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
       }
     };
   }, [clearTranscript, finalTranscript, transcript]);
+
+  useEffect(() => {
+    if (!voiceNotice || voiceNoticeId === lastVoiceNoticeIdRef.current) return;
+    lastVoiceNoticeIdRef.current = voiceNoticeId;
+    if (assistantMode === 'text') {
+      clearVoiceNotice();
+      return;
+    }
+
+    setAssistantEmotion('thinking');
+    setResponseText(voiceNotice);
+    void speak(voiceNotice, {
+      voiceGender,
+      voiceLanguage,
+      voiceTone,
+      queue: false,
+      preferBrowser: true,
+    });
+
+    const timer = window.setTimeout(() => {
+      clearVoiceNotice();
+      if (backgroundListening) {
+        startListening();
+      }
+    }, 2400);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    assistantMode,
+    backgroundListening,
+    clearVoiceNotice,
+    speak,
+    startListening,
+    voiceGender,
+    voiceLanguage,
+    voiceNotice,
+    voiceNoticeId,
+    voiceTone,
+  ]);
 
   const queueReadySpeech = useCallback(
     (fullText: string, force = false) => {
@@ -595,10 +799,7 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
       const idealChars = isFirstSpokenChunk ? 34 : 132;
       const softBreakChars = isFirstSpokenChunk ? 48 : 176;
       const minWords = isFirstSpokenChunk ? 4 : 14;
-      const wordCount = remaining
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean).length;
+      const wordCount = remaining.trim().split(/\s+/).filter(Boolean).length;
 
       const findWhitespaceBoundary = (targetChars: number) => {
         if (remaining.length < targetChars) return -1;
@@ -620,7 +821,9 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
       let boundaryIndex = -1;
       const punctuationMatches = [...remaining.matchAll(/[.!?।\n]/g)];
       if (punctuationMatches.length) {
-        const readyPunctuation = punctuationMatches.filter((match) => (match.index ?? 0) >= minChars);
+        const readyPunctuation = punctuationMatches.filter(
+          (match) => (match.index ?? 0) >= minChars
+        );
         const chosenPunctuation = isFirstSpokenChunk
           ? readyPunctuation[0]
           : readyPunctuation[readyPunctuation.length - 1];
@@ -661,10 +864,11 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
       spokenOffsetRef.current += boundaryIndex;
       const cleaned = speakable.trim();
       if (cleaned) {
+        const relationshipVoiceTone = voiceToneForSpeaker(activeSpeakerRef.current, voiceTone);
         void speak(cleaned, {
           voiceGender,
           voiceLanguage,
-          voiceTone,
+          voiceTone: relationshipVoiceTone,
           queue: true,
           preferBrowser: isFirstSpokenChunk || cleaned.length <= 180,
         });
@@ -762,7 +966,13 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
         body: JSON.stringify({
           display_name: displayName,
           relationship_to_owner: intro.relationship,
+          closeness_level: defaultClosenessForRelationship(intro.relationship),
+          communication_style: defaultCommunicationStyleForRelationship(intro.relationship),
+          language_preference: voiceLanguage,
           notes: `Voice onboarding from ${inputMode} mode`,
+          context_profile: buildSpeakerContextProfile(intro.relationship, inputMode),
+          conversation_summary: `${displayName} introduced themselves as ${intro.relationship || 'connected to Yogesh'}. Keep replies consistent with that relationship.`,
+          mood_state: 'neutral',
           last_heard_text: intro.sampleText || '',
           voice_signature: buildVoiceSignature(
             intro.sampleText,
@@ -793,12 +1003,17 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
     async (message: string, inputMode: 'voice' | 'text') => {
       const trimmed = message.trim();
       const startContinuousCommand =
-        /^(please start|start listening|start voice|continue listening|wake up|listen again)$/i.test(trimmed);
+        /^(please start|start listening|start voice|continue listening|wake up|listen again)$/i.test(
+          trimmed
+        );
       const stopContinuousCommand =
-        /^(stop|stop listening|pause listening|sleep|voice off|microphone off|mic off)$/i.test(trimmed);
+        /^(stop|stop listening|pause listening|sleep|voice off|microphone off|mic off)$/i.test(
+          trimmed
+        );
       const interruptionCommand =
-        /^(stop|wait|pause|hold on|enough|mute|silent|aagu|aapu|ruko|ruk jao)$/i.test(trimmed) ||
-        /^(ఆపు|ఆగు|रुको|बस)$/i.test(trimmed);
+        /^(stop|wait|pause|hold on|enough|mute|silent|aagu|aapu|ruko|ruk jao|bas)$/i.test(trimmed) ||
+        /^(ఆపు|ఆగు|రుకో|रुको|बस)$/i.test(trimmed) ||
+        /^(ఆపు|ఆగు|రుకో|रुको|बस)$/i.test(trimmed);
 
       if (!trimmed) return;
 
@@ -855,8 +1070,10 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
         inputMode === 'voice' &&
         activeSpeakerRef.current &&
         !awaitingSpeakerIntro &&
-        shouldChallengeSpeakerIdentity(activeSpeakerRef.current, voiceFrequencySignature)
+        shouldChallengeSpeakerIdentity(activeSpeakerRef.current, voiceFrequencySignature) &&
+        Date.now() - lastIdentityChallengeAtRef.current > 5 * 60 * 1000
       ) {
+        lastIdentityChallengeAtRef.current = Date.now();
         window.localStorage.removeItem('akansha-active-speaker');
         activeSpeakerRef.current = null;
         setActiveSpeaker(null);
@@ -947,7 +1164,9 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
         inputMode === 'voice' &&
         !activeSpeakerRef.current &&
         !awaitingSpeakerIntro &&
-        !/^(stop|wait|pause|hold on|enough|mute|silent|aagu|aapu|ruko|ruk jao)$/i.test(trimmed)
+        !/^(stop|wait|pause|hold on|enough|mute|silent|aagu|aapu|ruko|ruk jao|bas)$/i.test(trimmed) &&
+        !/^(ఆపు|ఆగు|రుకో|रुको|बस)$/i.test(trimmed) &&
+        !/^(ఆపు|ఆగు|రుకో|रुको|बस)$/i.test(trimmed)
       ) {
         const intro = extractSpeakerIntro(trimmed);
         if (intro.displayName || intro.relationship) {
@@ -1020,25 +1239,16 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
           }
         }
 
-        const introPrompt =
-          'Who are you? I am hearing you for the first time. Tell me your name and your relationship to Yogesh so I can remember your voice profile.';
-        setAwaitingSpeakerIntro(true);
-        setPendingSpeakerIntro(null);
-        setAssistantEmotion('thinking');
-        setResponseText(introPrompt);
-        void speak(introPrompt, {
-          voiceGender,
-          voiceLanguage,
-          voiceTone,
-          queue: false,
-        });
-        return;
+        // Default normal app sessions to the owner profile. Only ask identity when
+        // the speaker explicitly starts an introduction, so Yogesh is not challenged
+        // repeatedly during the same conversation.
       }
 
       if (streaming && !shouldInterruptActiveReply) return;
 
       const currentSpeaker = activeSpeakerRef.current;
-      const speakerIsLimited = inputMode === 'voice' && currentSpeaker && currentSpeaker.access_level !== 'owner';
+      const speakerIsLimited =
+        inputMode === 'voice' && currentSpeaker && currentSpeaker.access_level !== 'owner';
       const speakerNeedsOwnerApproval =
         speakerIsLimited &&
         (isAutomationIntent(trimmed) ||
@@ -1109,10 +1319,10 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
           !replyDate &&
           !replyTimes.startTime &&
           isLikelyTaskDetails(trimmed);
-        const reminderEnabled =
-          /\b(no|without)\b/.test(replyLower)
-            ? false
-            : pendingPlanner.reminderEnabled || /\b(yes|remind|notification|notify)\b/.test(replyLower);
+        const reminderEnabled = /\b(no|without)\b/.test(replyLower)
+          ? false
+          : pendingPlanner.reminderEnabled ||
+            /\b(yes|remind|notification|notify)\b/.test(replyLower);
         const replyReminderTime = inferPlannerCommand(
           `${pendingPlanner.kind === 'calendar' ? 'add to calendar' : 'add to todo list'} ${trimmed}`
         )?.reminderAt;
@@ -1130,7 +1340,8 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
           reminderAt:
             replyReminderTime ||
             pendingPlanner.reminderAt ||
-            (reminderEnabled && (replyDate || pendingPlanner.date || new Date().toISOString().slice(0, 10))
+            (reminderEnabled &&
+            (replyDate || pendingPlanner.date || new Date().toISOString().slice(0, 10))
               ? `${replyDate || pendingPlanner.date || new Date().toISOString().slice(0, 10)}T${
                   replyTimes.startTime || pendingPlanner.startTime || '09:00'
                 }:00`
@@ -1191,14 +1402,17 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
         setResponseText('');
 
         try {
-          const automationResponse = await fetch('http://localhost:8000/api/automation/browser/prompt', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              prompt: automationPrompt,
-              background: true,
-            }),
-          });
+          const automationResponse = await fetch(
+            'http://localhost:8000/api/automation/browser/prompt',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                prompt: automationPrompt,
+                background: true,
+              }),
+            }
+          );
           const payload = await automationResponse.json();
           const messageText =
             payload?.message ||
@@ -1302,7 +1516,8 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
               : plannerIntent.endTime,
           reminderAt:
             plannerIntent.reminderAt ||
-            (plannerIntent.reminderEnabled && (plannerIntent.date || new Date().toISOString().slice(0, 10))
+            (plannerIntent.reminderEnabled &&
+            (plannerIntent.date || new Date().toISOString().slice(0, 10))
               ? `${plannerIntent.date || new Date().toISOString().slice(0, 10)}T${
                   plannerIntent.startTime || '09:00'
                 }:00`
@@ -1329,6 +1544,7 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
       spokenOffsetRef.current = 0;
 
       const inferredEmotion = detectUserTone(trimmed);
+      const relationshipVoiceTone = voiceToneForSpeaker(activeSpeakerRef.current, voiceTone);
       setUserEmotion(inferredEmotion);
       setAssistantEmotion(inferredEmotion === 'sad' ? 'thinking' : inferredEmotion);
       setStreaming(true);
@@ -1345,9 +1561,15 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
             message: trimmed,
             session_id: sessionId,
             user_tone: inferredEmotion,
-            response_style: voiceTone,
+            response_style: relationshipVoiceTone,
             conversation_mode: assistantMode,
             language_preference: voiceLanguage,
+            speaker_profile: buildAssistantSpeakerPayload(
+              activeSpeakerRef.current,
+              profile?.full_name,
+              inferredEmotion,
+              voiceLanguage
+            ),
           }),
         });
 
@@ -1578,390 +1800,389 @@ export function AkanshaAssistant({ sessionId = 'voice-default' }: { sessionId?: 
           showSettings && !avatarFullscreen ? 'xl:grid-cols-[1.65fr_0.95fr]' : ''
         }`}
       >
-      <section
-        className={`flex flex-col border border-white/10 bg-slate-950 shadow-[0_40px_120px_rgba(15,23,42,0.6)] ${
-          avatarFullscreen
-            ? 'min-h-[calc(100vh-2rem)] rounded-[28px]'
-            : 'rounded-3xl'
-        }`}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 px-6 py-5">
-          <div>
-            <p className="text-xs uppercase tracking-[0.32em] text-slate-400">
-              Akansha Live Presence
-            </p>
-            <h1 className="mt-2 text-2xl font-semibold text-white">
-              Voice, presence, and natural conversation in one flow
-            </h1>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-200">
-              <span className="h-2 w-2 rounded-full bg-emerald-400" />
-              {stageStatus}
-            </div>
-
-            <button
-              onClick={() => setAvatarFullscreen((fullscreen) => !fullscreen)}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-white/10"
-            >
-              {avatarFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-              {avatarFullscreen ? 'Exit full screen' : 'Full screen'}
-            </button>
-
-            <button
-              onClick={() => setShowSettings((open) => !open)}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-white/10"
-            >
-              <Settings2 size={15} />
-              {showSettings ? 'Hide controls' : 'Show controls'}
-            </button>
-          </div>
-        </div>
-
-        <div
-          className={`grid flex-1 grid-cols-1 gap-6 p-6 ${
-            avatarFullscreen
-              ? 'lg:grid-cols-[minmax(680px,1fr)_minmax(300px,380px)]'
-              : 'lg:grid-cols-[minmax(520px,1.45fr)_minmax(300px,0.72fr)]'
+        <section
+          className={`flex flex-col border border-white/10 bg-slate-950 shadow-[0_40px_120px_rgba(15,23,42,0.6)] ${
+            avatarFullscreen ? 'min-h-[calc(100vh-2rem)] rounded-[28px]' : 'rounded-3xl'
           }`}
         >
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 px-6 py-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.32em] text-slate-400">
+                Akansha Live Presence
+              </p>
+              <h1 className="mt-2 text-2xl font-semibold text-white">
+                Voice, presence, and natural conversation in one flow
+              </h1>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-200">
+                <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                {stageStatus}
+              </div>
+
+              <button
+                onClick={() => setAvatarFullscreen((fullscreen) => !fullscreen)}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-white/10"
+              >
+                {avatarFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                {avatarFullscreen ? 'Exit full screen' : 'Full screen'}
+              </button>
+
+              <button
+                onClick={() => setShowSettings((open) => !open)}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-white/10"
+              >
+                <Settings2 size={15} />
+                {showSettings ? 'Hide controls' : 'Show controls'}
+              </button>
+            </div>
+          </div>
+
           <div
-            className={`flex flex-col overflow-hidden rounded-[28px] border border-white/10 bg-slate-950 ${
-              avatarFullscreen ? 'min-h-[calc(100vh-12rem)]' : 'min-h-[720px]'
+            className={`grid flex-1 grid-cols-1 gap-6 p-6 ${
+              avatarFullscreen
+                ? 'lg:grid-cols-[minmax(680px,1fr)_minmax(300px,380px)]'
+                : 'lg:grid-cols-[minmax(520px,1.45fr)_minmax(300px,0.72fr)]'
             }`}
           >
-            <div className="relative flex-1">
-              <AssistantAvatarStage
-                isListening={isListening}
-                isSpeaking={isSpeaking}
-                speakingVolume={speakingVolume}
-                viseme={viseme}
-                emotion={assistantEmotion}
-                listenerEmotion={userEmotion}
-                voiceGender={voiceGender}
-                voiceTone={voiceTone}
-              />
+            <div
+              className={`flex flex-col overflow-hidden rounded-[28px] border border-white/10 bg-slate-950 ${
+                avatarFullscreen ? 'min-h-[calc(100vh-12rem)]' : 'min-h-[720px]'
+              }`}
+            >
+              <div className="relative flex-1">
+                <AssistantAvatarStage
+                  isListening={isListening}
+                  isSpeaking={isSpeaking}
+                  speakingVolume={speakingVolume}
+                  viseme={viseme}
+                  emotion={assistantEmotion}
+                  listenerEmotion={userEmotion}
+                  voiceGender={voiceGender}
+                  voiceTone={voiceToneForSpeaker(activeSpeaker, voiceTone)}
+                />
 
-              <div className="absolute inset-x-0 bottom-0 flex flex-col gap-4 p-6">
-                <div className="flex flex-wrap items-center justify-center gap-3">
-                  <button
-                    onClick={() => {
-                      if (isListening || backgroundListening) {
-                        setBackgroundListening(false);
-                        void persistProfilePatch({ background_listening: false });
-                        stopListening();
-                        return;
-                      }
-                      setBackgroundListening(true);
-                      void persistProfilePatch({ background_listening: true });
-                      startListening();
-                    }}
-                    className={`inline-flex h-14 w-14 items-center justify-center rounded-full transition-all ${
-                      isListening
-                        ? 'bg-red-500 text-white shadow-[0_0_40px_rgba(239,68,68,0.35)]'
-                        : 'bg-[#6c47ff] text-white shadow-[0_0_40px_rgba(108,71,255,0.35)]'
-                    }`}
-                  >
-                    {isListening ? <MicOff size={24} /> : <Mic size={24} />}
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      stopSpeaking();
-                      if (backgroundListening) startListening();
-                    }}
-                    className="inline-flex h-12 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 text-sm text-slate-100 transition-colors hover:bg-white/10"
-                  >
-                    <PauseCircle size={18} />
-                    Interrupt
-                  </button>
-
-                  <button
-                    onClick={() => (isSpeaking ? stopSpeaking() : previewSelectedVoice())}
-                    className="inline-flex h-12 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 text-sm text-slate-100 transition-colors hover:bg-white/10"
-                  >
-                    {isSpeaking ? <VolumeX size={18} /> : <Play size={18} />}
-                    {isSpeaking ? 'Mute reply' : 'Replay'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-4">
-            <div className="rounded-[28px] border border-white/10 bg-slate-900/85 p-5">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.28em] text-slate-500">
-                    Interaction mode
-                  </p>
-                  <p className="mt-2 text-sm text-slate-200">
-                    Switch between text, voice, and hybrid conversations.
-                  </p>
-                </div>
-                <div className="inline-flex rounded-full bg-slate-800 p-1">
-                  {modeOptions.map((option) => (
+                <div className="absolute inset-x-0 bottom-0 flex flex-col gap-4 p-6">
+                  <div className="flex flex-wrap items-center justify-center gap-3">
                     <button
-                      key={option.value}
                       onClick={() => {
-                        setAssistantMode(option.value);
-                        if (option.value === 'voice') {
-                          setAvatarFullscreen(true);
+                        if (isListening || backgroundListening) {
+                          setBackgroundListening(false);
+                          void persistProfilePatch({ background_listening: false });
+                          stopListening();
+                          return;
                         }
-                        void persistProfilePatch({ preferred_mode: option.value });
+                        setBackgroundListening(true);
+                        void persistProfilePatch({ background_listening: true });
+                        startListening();
                       }}
-                      className={`rounded-full px-3 py-1.5 text-sm transition-colors ${
-                        assistantMode === option.value
-                          ? 'bg-[#6c47ff] text-white'
-                          : 'text-slate-400 hover:text-slate-100'
+                      className={`inline-flex h-14 w-14 items-center justify-center rounded-full transition-all ${
+                        isListening
+                          ? 'bg-red-500 text-white shadow-[0_0_40px_rgba(239,68,68,0.35)]'
+                          : 'bg-[#6c47ff] text-white shadow-[0_0_40px_rgba(108,71,255,0.35)]'
                       }`}
                     >
-                      {option.label}
+                      {isListening ? <MicOff size={24} /> : <Mic size={24} />}
                     </button>
-                  ))}
+
+                    <button
+                      onClick={() => {
+                        stopSpeaking();
+                        if (backgroundListening) startListening();
+                      }}
+                      className="inline-flex h-12 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 text-sm text-slate-100 transition-colors hover:bg-white/10"
+                    >
+                      <PauseCircle size={18} />
+                      Interrupt
+                    </button>
+
+                    <button
+                      onClick={() => (isSpeaking ? stopSpeaking() : previewSelectedVoice())}
+                      className="inline-flex h-12 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 text-sm text-slate-100 transition-colors hover:bg-white/10"
+                    >
+                      {isSpeaking ? <VolumeX size={18} /> : <Play size={18} />}
+                      {isSpeaking ? 'Mute reply' : 'Replay'}
+                    </button>
+                  </div>
                 </div>
               </div>
-
-              {(assistantMode === 'text' || assistantMode === 'hybrid') && (
-                <div className="mt-4 flex gap-3">
-                  <textarea
-                    value={typedMessage}
-                    onChange={(event) => setTypedMessage(event.target.value)}
-                    rows={3}
-                    placeholder="Talk to Akansha with text, or keep the mic open in hybrid mode..."
-                    className="flex-1 resize-none rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-[#6c47ff]/60"
-                  />
-                  <button
-                    onClick={() => void handleConversationTurn(typedMessage, 'text')}
-                    disabled={streaming || !typedMessage.trim()}
-                    className="inline-flex h-fit items-center gap-2 rounded-2xl bg-[#6c47ff] px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-[#5a35ee] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {streaming ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <Sparkles size={16} />
-                    )}
-                    Send
-                  </button>
-                </div>
-              )}
             </div>
 
-            <div className="flex-1 rounded-[28px] border border-white/10 bg-slate-900/85 p-5">
+            <div className="flex flex-col gap-4">
+              <div className="rounded-[28px] border border-white/10 bg-slate-900/85 p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.28em] text-slate-500">
+                      Interaction mode
+                    </p>
+                    <p className="mt-2 text-sm text-slate-200">
+                      Switch between text, voice, and hybrid conversations.
+                    </p>
+                  </div>
+                  <div className="inline-flex rounded-full bg-slate-800 p-1">
+                    {modeOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        onClick={() => {
+                          setAssistantMode(option.value);
+                          if (option.value === 'voice') {
+                            setAvatarFullscreen(true);
+                          }
+                          void persistProfilePatch({ preferred_mode: option.value });
+                        }}
+                        className={`rounded-full px-3 py-1.5 text-sm transition-colors ${
+                          assistantMode === option.value
+                            ? 'bg-[#6c47ff] text-white'
+                            : 'text-slate-400 hover:text-slate-100'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {(assistantMode === 'text' || assistantMode === 'hybrid') && (
+                  <div className="mt-4 flex gap-3">
+                    <textarea
+                      value={typedMessage}
+                      onChange={(event) => setTypedMessage(event.target.value)}
+                      rows={3}
+                      placeholder="Talk to Akansha with text, or keep the mic open in hybrid mode..."
+                      className="flex-1 resize-none rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-[#6c47ff]/60"
+                    />
+                    <button
+                      onClick={() => void handleConversationTurn(typedMessage, 'text')}
+                      disabled={streaming || !typedMessage.trim()}
+                      className="inline-flex h-fit items-center gap-2 rounded-2xl bg-[#6c47ff] px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-[#5a35ee] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {streaming ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Sparkles size={16} />
+                      )}
+                      Send
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex-1 rounded-[28px] border border-white/10 bg-slate-900/85 p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.28em] text-slate-500">
+                      Live conversation
+                    </p>
+                    <p className="mt-2 text-sm text-slate-200">
+                      Akansha adapts voice and facial expression to your tone.
+                    </p>
+                  </div>
+                  {streaming && <Loader2 size={18} className="animate-spin text-[#38bdf8]" />}
+                </div>
+
+                <div className="mt-4 space-y-4">
+                  <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/8 p-4">
+                    <p className="text-xs uppercase tracking-[0.22em] text-indigo-200/80">
+                      You · {emotionLabel(userEmotion)}
+                    </p>
+                    <p className="mt-2 text-sm leading-6 text-indigo-50">
+                      {transcript ||
+                        finalTranscript ||
+                        'Your live transcript will appear here when you speak.'}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
+                    <p className="text-xs uppercase tracking-[0.22em] text-emerald-200/80">
+                      Akansha · {emotionLabel(assistantEmotion)}
+                    </p>
+                    <p className="mt-2 text-sm leading-6 text-slate-100">
+                      {responseText ||
+                        'Akansha is ready to reply naturally with voice and avatar cues.'}
+                    </p>
+                  </div>
+                </div>
+                <div ref={conversationRef} />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {showSettings && !avatarFullscreen && (
+          <aside className="flex flex-col gap-5 xl:self-start">
+            <section className="rounded-3xl border border-white/10 bg-slate-900/85 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.28em] text-slate-500">
-                    Live conversation
+                    Automation checklist
                   </p>
-                  <p className="mt-2 text-sm text-slate-200">
-                    Akansha adapts voice and facial expression to your tone.
-                  </p>
+                  <h2 className="mt-2 text-lg font-semibold text-white">Ready checks</h2>
                 </div>
-                {streaming && <Loader2 size={18} className="animate-spin text-[#38bdf8]" />}
+                <CheckCheck size={20} className="text-emerald-300" />
               </div>
 
-              <div className="mt-4 space-y-4">
-                <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/8 p-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-indigo-200/80">
-                    You · {emotionLabel(userEmotion)}
+              <div className="mt-5 grid max-h-[340px] gap-2 overflow-y-auto pr-1">
+                {AUTOMATION_READINESS_CHECKLIST.map((item) => (
+                  <div
+                    key={item}
+                    className="flex items-center gap-3 rounded-2xl border border-emerald-400/10 bg-emerald-400/5 px-3 py-2.5 text-sm text-slate-100"
+                  >
+                    <span className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-200">
+                      <Check size={13} />
+                    </span>
+                    <span>{item}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-3xl border border-white/10 bg-slate-900/85 p-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.28em] text-slate-500">
+                    Voice profile
                   </p>
-                  <p className="mt-2 text-sm leading-6 text-indigo-50">
-                    {transcript ||
-                      finalTranscript ||
-                      'Your live transcript will appear here when you speak.'}
-                  </p>
+                  <h2 className="mt-2 text-lg font-semibold text-white">
+                    Natural conversation controls
+                  </h2>
                 </div>
-
-                <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-emerald-200/80">
-                    Akansha · {emotionLabel(assistantEmotion)}
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-slate-100">
-                    {responseText ||
-                      'Akansha is ready to reply naturally with voice and avatar cues.'}
-                  </p>
-                </div>
-              </div>
-              <div ref={conversationRef} />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {showSettings && !avatarFullscreen && (
-        <aside className="flex flex-col gap-5 xl:self-start">
-          <section className="rounded-3xl border border-white/10 bg-slate-900/85 p-5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">
-                  Automation checklist
-                </p>
-                <h2 className="mt-2 text-lg font-semibold text-white">Ready checks</h2>
-              </div>
-              <CheckCheck size={20} className="text-emerald-300" />
-            </div>
-
-            <div className="mt-5 grid max-h-[340px] gap-2 overflow-y-auto pr-1">
-              {AUTOMATION_READINESS_CHECKLIST.map((item) => (
-                <div
-                  key={item}
-                  className="flex items-center gap-3 rounded-2xl border border-emerald-400/10 bg-emerald-400/5 px-3 py-2.5 text-sm text-slate-100"
-                >
-                  <span className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-200">
-                    <Check size={13} />
-                  </span>
-                  <span>{item}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-3xl border border-white/10 bg-slate-900/85 p-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Voice profile</p>
-                <h2 className="mt-2 text-lg font-semibold text-white">
-                  Natural conversation controls
-                </h2>
-              </div>
-              {loadingProfile && <Loader2 size={18} className="animate-spin text-slate-500" />}
-            </div>
-
-            <div className="mt-5 space-y-4">
-              <div>
-                <label className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                  Voice gender
-                </label>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {(['female', 'male'] as VoiceGender[]).map((gender) => (
-                    <button
-                      key={gender}
-                      onClick={() => {
-                        setVoiceGender(gender);
-                        void persistProfilePatch({ voice_gender: gender });
-                      }}
-                      className={`rounded-2xl px-4 py-3 text-sm transition-colors ${
-                        voiceGender === gender
-                          ? 'bg-[#6c47ff] text-white'
-                          : 'bg-slate-950 text-slate-300 hover:bg-slate-800'
-                      }`}
-                    >
-                      {gender === 'female' ? 'Female voice' : 'Male voice'}
-                    </button>
-                  ))}
-                </div>
+                {loadingProfile && <Loader2 size={18} className="animate-spin text-slate-500" />}
               </div>
 
-              <div>
-                <label className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                  Language preference
-                </label>
-                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  {(
-                    [
-                      { value: 'telugu_english', label: 'Telugu + English' },
-                      { value: 'english', label: 'English' },
-                      { value: 'hindi', label: 'Hindi' },
-                    ] as Array<{ value: VoiceLanguagePreference; label: string }>
-                  ).map((option) => (
-                    <button
-                      key={option.value}
-                      onClick={() => {
-                        setVoiceLanguage(option.value);
-                        window.localStorage.setItem('akansha_voice_language', option.value);
-                        void persistProfilePatch({ voice_language: option.value });
-                      }}
-                      className={`rounded-2xl px-4 py-3 text-sm transition-colors ${
-                        voiceLanguage === option.value
-                          ? 'bg-[#6c47ff] text-white'
-                          : 'bg-slate-950 text-slate-300 hover:bg-slate-800'
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                  Voice tone
-                </label>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {(['friendly', 'professional', 'energetic', 'calm'] as VoiceTone[]).map(
-                    (tone) => (
+              <div className="mt-5 space-y-4">
+                <div>
+                  <label className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                    Voice gender
+                  </label>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {(['female', 'male'] as VoiceGender[]).map((gender) => (
                       <button
-                        key={tone}
+                        key={gender}
                         onClick={() => {
-                          setVoiceTone(tone);
-                          void persistProfilePatch({ voice_tone: tone });
+                          setVoiceGender(gender);
+                          void persistProfilePatch({ voice_gender: gender });
                         }}
-                        className={`rounded-2xl px-4 py-3 text-sm capitalize transition-colors ${
-                          voiceTone === tone
-                            ? 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/30'
+                        className={`rounded-2xl px-4 py-3 text-sm transition-colors ${
+                          voiceGender === gender
+                            ? 'bg-[#6c47ff] text-white'
                             : 'bg-slate-950 text-slate-300 hover:bg-slate-800'
                         }`}
                       >
-                        {tone}
+                        {gender === 'female' ? 'Female voice' : 'Male voice'}
                       </button>
-                    )
-                  )}
+                    ))}
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                  Voice variant
-                </label>
-                <select
-                  value={selectedVoiceId ?? ''}
-                  onChange={(event) => setSelectedVoiceId(event.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-slate-200 outline-none focus:border-[#6c47ff]/50"
-                >
-                  {voiceChoices.map((voice) => (
-                    <option key={voice.id} value={voice.id}>
-                      {voice.name} · {voice.lang}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-2 text-xs text-slate-400">
-                  Replies now follow your selected language preference for Telugu + English, English,
-                  or Hindi. The Irina clip stays available only as a preview sample.
-                </p>
-                <p className="mt-2 text-xs text-slate-500">
-                  Shortcut: <span className="font-medium text-slate-300">Ctrl + Shift + Space</span>{' '}
-                  toggles continuous voice listening on or off.
-                </p>
-              </div>
+                <div>
+                  <label className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                    Language preference
+                  </label>
+                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {(
+                      [
+                        { value: 'telugu_english', label: 'Telugu + English' },
+                        { value: 'english', label: 'English' },
+                        { value: 'hindi', label: 'Hindi' },
+                      ] as Array<{ value: VoiceLanguagePreference; label: string }>
+                    ).map((option) => (
+                      <button
+                        key={option.value}
+                        onClick={() => {
+                          setVoiceLanguage(option.value);
+                          window.localStorage.setItem('akansha_voice_language', option.value);
+                          void persistProfilePatch({ voice_language: option.value });
+                        }}
+                        className={`rounded-2xl px-4 py-3 text-sm transition-colors ${
+                          voiceLanguage === option.value
+                            ? 'bg-[#6c47ff] text-white'
+                            : 'bg-slate-950 text-slate-300 hover:bg-slate-800'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-              <label className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-slate-200">
-                Background listening
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !backgroundListening;
-                    setBackgroundListening(next);
-                    void persistProfilePatch({ background_listening: next });
-                  }}
-                  className={`relative h-6 w-11 flex-shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${
-                    backgroundListening ? 'bg-emerald-500' : 'bg-slate-700'
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none absolute left-1 top-1 h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      backgroundListening ? 'translate-x-5' : 'translate-x-0'
+                <div>
+                  <label className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                    Voice tone
+                  </label>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {(['friendly', 'professional', 'energetic', 'calm'] as VoiceTone[]).map(
+                      (tone) => (
+                        <button
+                          key={tone}
+                          onClick={() => {
+                            setVoiceTone(tone);
+                            void persistProfilePatch({ voice_tone: tone });
+                          }}
+                          className={`rounded-2xl px-4 py-3 text-sm capitalize transition-colors ${
+                            voiceTone === tone
+                              ? 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/30'
+                              : 'bg-slate-950 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          {tone}
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                    Voice variant
+                  </label>
+                  <select
+                    value={selectedVoiceId ?? ''}
+                    onChange={(event) => setSelectedVoiceId(event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-slate-200 outline-none focus:border-[#6c47ff]/50"
+                  >
+                    {voiceChoices.map((voice) => (
+                      <option key={voice.id} value={voice.id}>
+                        {voice.name} · {voice.lang}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-xs text-slate-400">
+                    Replies now follow your selected language preference for Telugu + English,
+                    English, or Hindi. The Irina clip stays available only as a preview sample.
+                  </p>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Shortcut:{' '}
+                    <span className="font-medium text-slate-300">Ctrl + Shift + Space</span> toggles
+                    continuous voice listening on or off.
+                  </p>
+                </div>
+
+                <label className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-slate-200">
+                  Background listening
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !backgroundListening;
+                      setBackgroundListening(next);
+                      void persistProfilePatch({ background_listening: next });
+                    }}
+                    className={`relative h-6 w-11 flex-shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${
+                      backgroundListening ? 'bg-emerald-500' : 'bg-slate-700'
                     }`}
-                  />
-                </button>
-              </label>
-            </div>
-          </section>
-
-        </aside>
-      )}
+                  >
+                    <span
+                      className={`pointer-events-none absolute left-1 top-1 h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        backgroundListening ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </label>
+              </div>
+            </section>
+          </aside>
+        )}
       </div>
-
     </div>
   );
 }

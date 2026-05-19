@@ -1,6 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  claimAkanshaAudio,
+  hardCancelBrowserSpeech,
+  releaseAkanshaAudio,
+  settleBrowserSpeechCancel,
+} from '@/lib/audioPlaybackGuard';
 
 export type VoiceGender = 'male' | 'female';
 export type VoiceTone = 'friendly' | 'professional' | 'energetic' | 'calm';
@@ -55,6 +61,8 @@ interface VoiceState {
   isSpeaking: boolean;
   transcript: string;
   finalTranscript: string;
+  voiceNotice: string;
+  voiceNoticeId: number;
   speakingVolume: number;
   viseme: number;
 }
@@ -142,10 +150,112 @@ const FEMALE_SAMPLE_OPTION: VoiceOption = {
   kind: 'sample',
 };
 const SPEECH_INTERRUPT_PATTERN =
-  /\b(stop|wait|pause|hold on|enough|silent|mute|aagu|aapu|ruko|ruk jao)\b|ఆపు|ఆగు|रुको|बस/i;
+  /\b(stop|wait|pause|hold on|enough|silent|mute|aagu|aapu|ruko|ruk jao|bas)\b|ఆపు|ఆగు|రుకో|रुको|बस/i;
 
 const INTERRUPTION_RESTART_DELAY_MS = 80;
 const LISTENING_KEEPALIVE_MS = 650;
+const BARGE_IN_RMS_THRESHOLD = 0.026;
+const SOFT_SPEECH_RMS_THRESHOLD = 0.014;
+const BARGE_IN_HOLD_MS = 120;
+const SILENCE_RESTART_MS = 1400;
+
+const HINDI_ROMAN_HINTS = new Set([
+  'namaste',
+  'hindi',
+  'kaise',
+  'kaisa',
+  'kaisi',
+  'kya',
+  'kyun',
+  'kab',
+  'kahan',
+  'kaun',
+  'mujhe',
+  'mere',
+  'mera',
+  'meri',
+  'tum',
+  'aap',
+  'hai',
+  'hain',
+  'ho',
+  'nahi',
+  'nahin',
+  'batao',
+  'batana',
+  'samjhao',
+  'chalo',
+  'ruk',
+  'ruko',
+  'theek',
+  'thik',
+  'bas',
+  'acha',
+  'accha',
+  'aaj',
+  'kal',
+  'karna',
+  'karo',
+  'chahiye',
+  'yaar',
+  'bhai',
+  'chal',
+  'raha',
+  'rahe',
+  'lagta',
+  'lagi',
+]);
+
+const TELUGU_ROMAN_HINTS = new Set([
+  'telugu',
+  'anna',
+  'ayya',
+  'andi',
+  'ra',
+  'randi',
+  'ledu',
+  'kadu',
+  'naku',
+  'naaku',
+  'neeku',
+  'meeru',
+  'nuvvu',
+  'emi',
+  'em',
+  'enti',
+  'ela',
+  'unnav',
+  'unnaru',
+  'cheppu',
+  'cheptha',
+  'cheppandi',
+  'chesa',
+  'chesadu',
+  'chesindi',
+  'chudu',
+  'choopu',
+  'matladu',
+  'matladandi',
+  'bagundi',
+  'sare',
+  'inka',
+  'ippudu',
+  'eppudu',
+  'enduku',
+  'ekkada',
+  'lo',
+  'ki',
+  'ga',
+  'ante',
+  'aithe',
+  'kani',
+  'undi',
+  'ravatledu',
+  'avvali',
+  'chestunnav',
+  'jarigindi',
+  'vellali',
+]);
 
 function recognitionLanguagesFor(preference: VoiceLanguagePreference) {
   if (preference === 'hindi') return ['hi-IN', 'en-IN'];
@@ -371,6 +481,8 @@ function detectVoiceLanguageMode(
   const hindiChars = (text.match(/[\u0900-\u097F]/g) ?? []).length;
   const latinChars = (text.match(/[A-Za-z]/g) ?? []).length;
   const words = new Set((text.toLowerCase().match(/[a-z]+/g) ?? []));
+  const teluguScore = [...words].filter((word) => TELUGU_ROMAN_HINTS.has(word)).length;
+  const hindiScore = [...words].filter((word) => HINDI_ROMAN_HINTS.has(word)).length;
 
   if (hindiChars > 0) {
     return 'hindi';
@@ -381,22 +493,14 @@ function detectVoiceLanguageMode(
   if (teluguChars > 0) {
     return 'telugu';
   }
-  if (preference === 'hindi') return 'hindi';
-  if (preference === 'telugu_english') return 'mixed';
-  if (
-    ['namaste', 'hindi', 'kaise', 'kya', 'mujhe', 'aap', 'hai', 'nahi', 'batao'].some((word) =>
-      words.has(word)
-    )
-  ) {
+  if (hindiScore >= 2 && hindiScore > teluguScore) {
     return 'hindi';
   }
-  if (
-    ['telugu', 'anna', 'andi', 'naku', 'naaku', 'meeru', 'ela', 'unnaru', 'cheppu'].some((word) =>
-      words.has(word)
-    )
-  ) {
+  if (teluguScore >= 2 && teluguScore >= hindiScore) {
     return 'mixed';
   }
+  if (preference === 'hindi' && hindiScore >= 1) return 'hindi';
+  if (preference === 'telugu_english' && teluguScore >= 1) return 'mixed';
   return 'english';
 }
 
@@ -426,6 +530,8 @@ export function useVoice() {
     isSpeaking: false,
     transcript: '',
     finalTranscript: '',
+    voiceNotice: '',
+    voiceNoticeId: 0,
     speakingVolume: 0,
     viseme: 0,
   });
@@ -446,6 +552,11 @@ export function useVoice() {
   const sampleAudioRef = useRef<HTMLAudioElement | null>(null);
   const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
   const playbackUrlRef = useRef<string | null>(null);
+  const playbackGenerationRef = useRef(0);
+  const playbackStopResolveRef = useRef<(() => void) | null>(null);
+  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const audioOwnerIdRef = useRef(`voice-${Math.random().toString(36).slice(2)}`);
+  const speechQueueRunIdRef = useRef(0);
   const speechQueueRef = useRef<QueuedSpeechItem[]>([]);
   const processingQueueRef = useRef(false);
   const stopRequestedRef = useRef(false);
@@ -456,6 +567,11 @@ export function useVoice() {
   const microphoneBlockedRef = useRef(false);
   const recognitionRestartTimerRef = useRef<number | null>(null);
   const recognitionLanguageIndexRef = useRef(0);
+  const lastSpeechEnergyAtRef = useRef(0);
+  const bargeInStartedAtRef = useRef<number | null>(null);
+  const pendingBargeInRef = useRef(false);
+  const bargeInCaptureTimerRef = useRef<number | null>(null);
+  const ambientRmsRef = useRef(0.008);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
@@ -471,6 +587,36 @@ export function useVoice() {
   const visemeStartTimeRef = useRef(0);
 
   const stopSpeechNowRef = useRef<(nextState?: Partial<VoiceState>) => void>(() => undefined);
+
+  const raiseVoiceNotice = useCallback((message: string) => {
+    setState((previous) => ({
+      ...previous,
+      voiceNotice: message,
+      voiceNoticeId: previous.voiceNoticeId + 1,
+    }));
+  }, []);
+
+  const clearVoiceNotice = useCallback(() => {
+    setState((previous) => ({ ...previous, voiceNotice: '' }));
+  }, []);
+
+  const clearBargeInCaptureTimer = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (bargeInCaptureTimerRef.current) {
+      window.clearTimeout(bargeInCaptureTimerRef.current);
+      bargeInCaptureTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleBargeInCaptureTimeout = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    clearBargeInCaptureTimer();
+    bargeInCaptureTimerRef.current = window.setTimeout(() => {
+      if (!pendingBargeInRef.current) return;
+      pendingBargeInRef.current = false;
+      raiseVoiceNotice("Sorry, I heard you interrupt, but I didn't catch the words. Can you repeat that?");
+    }, 2600);
+  }, [clearBargeInCaptureTimer, raiseVoiceNotice]);
 
   useEffect(() => {
     isSpeakingRef.current = state.isSpeaking;
@@ -556,13 +702,35 @@ export function useVoice() {
 
         const heardText = `${finalResult} ${interim}`.trim();
         const finalHeardText = finalResult.trim();
+        if (heardText) {
+          clearVoiceNotice();
+          clearBargeInCaptureTimer();
+          lastSpeechEnergyAtRef.current = Date.now();
+          const languageMode = detectVoiceLanguageMode(heardText, voiceLanguage);
+          const nextLanguage =
+            languageMode === 'hindi'
+              ? 'hi-IN'
+              : languageMode === 'telugu'
+                ? 'te-IN'
+                : languageMode === 'mixed'
+                  ? 'en-IN'
+                  : preferredRecognitionLanguage(voiceLanguage, recognitionLanguageIndexRef.current);
+          if (recognition.lang !== nextLanguage) {
+            recognition.lang = nextLanguage;
+          }
+        }
         if (isSpeakingRef.current && SPEECH_INTERRUPT_PATTERN.test(heardText)) {
           stopSpeechNowRef.current({ transcript: '', finalTranscript: '' });
           return;
         }
 
-        if (isSpeakingRef.current && heardText.split(/\s+/).filter(Boolean).length >= 2) {
+        if (
+          (isSpeakingRef.current || pendingBargeInRef.current) &&
+          heardText.split(/\s+/).filter(Boolean).length >= 1
+        ) {
           stopSpeechNowRef.current();
+          pendingBargeInRef.current = false;
+          clearBargeInCaptureTimer();
           if (!finalHeardText) {
             setState((previous) => ({ ...previous, transcript: interim.trim() }));
             return;
@@ -571,6 +739,8 @@ export function useVoice() {
 
         if (isSpeakingRef.current && finalHeardText) {
           stopSpeechNowRef.current();
+          pendingBargeInRef.current = false;
+          clearBargeInCaptureTimer();
           setState((previous) => ({
             ...previous,
             transcript: interim.trim(),
@@ -611,6 +781,14 @@ export function useVoice() {
           !manuallyStoppedRef.current &&
           ['no-speech', 'audio-capture', 'network', 'aborted'].includes(event?.error)
         ) {
+          if (
+            event?.error === 'no-speech' &&
+            (pendingBargeInRef.current || Date.now() - lastSpeechEnergyAtRef.current < SILENCE_RESTART_MS)
+          ) {
+            pendingBargeInRef.current = false;
+            clearBargeInCaptureTimer();
+            raiseVoiceNotice("Sorry, I didn't catch that clearly. Can you repeat it once?");
+          }
           if (['no-speech', 'network'].includes(event?.error)) {
             recognitionLanguageIndexRef.current += 1;
             recognition.lang = preferredRecognitionLanguage(
@@ -621,6 +799,8 @@ export function useVoice() {
           if (recognitionRestartTimerRef.current) {
             window.clearTimeout(recognitionRestartTimerRef.current);
           }
+          const restartDelay =
+            Date.now() - lastSpeechEnergyAtRef.current < SILENCE_RESTART_MS ? 120 : 240;
           recognitionRestartTimerRef.current = window.setTimeout(() => {
             try {
               recognitionStartingRef.current = true;
@@ -629,7 +809,7 @@ export function useVoice() {
               recognitionStartingRef.current = false;
               // Browser may reject overlapping starts.
             }
-          }, 240);
+          }, restartDelay);
         }
       };
 
@@ -640,6 +820,8 @@ export function useVoice() {
           if (recognitionRestartTimerRef.current) {
             window.clearTimeout(recognitionRestartTimerRef.current);
           }
+          const restartDelay =
+            Date.now() - lastSpeechEnergyAtRef.current < SILENCE_RESTART_MS ? 90 : 220;
           recognitionRestartTimerRef.current = window.setTimeout(() => {
             try {
               recognitionStartingRef.current = true;
@@ -648,7 +830,7 @@ export function useVoice() {
               recognitionStartingRef.current = false;
               // no-op; browser may reject overlapping starts
             }
-          }, 220);
+          }, restartDelay);
         }
       };
 
@@ -667,8 +849,16 @@ export function useVoice() {
         window.clearTimeout(recognitionRestartTimerRef.current);
         recognitionRestartTimerRef.current = null;
       }
+      clearBargeInCaptureTimer();
     };
-  }, [selectedVoiceId, voiceGender, voiceLanguage]);
+  }, [
+    clearBargeInCaptureTimer,
+    clearVoiceNotice,
+    raiseVoiceNotice,
+    selectedVoiceId,
+    voiceGender,
+    voiceLanguage,
+  ]);
 
   useEffect(() => {
     if (!availableVoices.length) return;
@@ -735,6 +925,11 @@ export function useVoice() {
     visemeTimelineRef.current = frames;
     visemeStartTimeRef.current = window.performance.now();
 
+    if (!frames.length) {
+      setState((previous) => ({ ...previous, speakingVolume: 0, viseme: 0 }));
+      return;
+    }
+
     visemeIntervalRef.current = window.setInterval(() => {
       if (visemeTimelineRef.current.length) {
         const elapsed = (window.performance.now() - visemeStartTimeRef.current) / 1000;
@@ -748,12 +943,8 @@ export function useVoice() {
         return;
       }
 
-      setState((previous) => ({
-        ...previous,
-        speakingVolume: 0.35 + Math.random() * 0.65,
-        viseme: (previous.viseme + 1) % 5,
-      }));
-    }, frames.length ? 34 : 110);
+      setState((previous) => ({ ...previous, speakingVolume: 0, viseme: 0 }));
+    }, 34);
   }, []);
 
   const stopVisemeAnimation = useCallback(() => {
@@ -776,6 +967,7 @@ export function useVoice() {
 
   const stopMicFrequencyCapture = useCallback(() => {
     if (typeof window === 'undefined') return;
+    clearBargeInCaptureTimer();
     if (micFrameRef.current) {
       window.cancelAnimationFrame(micFrameRef.current);
       micFrameRef.current = null;
@@ -791,7 +983,7 @@ export function useVoice() {
     micStreamRef.current = null;
     void micAudioContextRef.current?.close().catch(() => undefined);
     micAudioContextRef.current = null;
-  }, []);
+  }, [clearBargeInCaptureTimer]);
 
   const startMicFrequencyCapture = useCallback(
     async (stream: MediaStream) => {
@@ -843,6 +1035,44 @@ export function useVoice() {
               return sum + centered * centered;
             }, 0) / Math.max(1, timeData.length)
           ) || 0;
+        const nowMs = Date.now();
+        const speechBandRatio = midEnergy / Math.max(1, lowEnergy + midEnergy + highEnergy);
+        const ambientRms = ambientRmsRef.current;
+        const adaptiveSoftThreshold = Math.min(
+          0.04,
+          Math.max(SOFT_SPEECH_RMS_THRESHOLD, ambientRms * 1.9 + 0.004)
+        );
+        const adaptiveBargeThreshold = Math.min(
+          0.065,
+          Math.max(BARGE_IN_RMS_THRESHOLD, ambientRms * 2.7 + 0.008)
+        );
+
+        if (!isSpeakingRef.current && rms < adaptiveSoftThreshold && speechBandRatio < 0.34) {
+          ambientRmsRef.current = ambientRms * 0.94 + rms * 0.06;
+        }
+
+        if (rms >= adaptiveSoftThreshold && speechBandRatio > 0.2) {
+          lastSpeechEnergyAtRef.current = nowMs;
+        }
+
+        if (
+          isSpeakingRef.current &&
+          rms >= adaptiveBargeThreshold &&
+          speechBandRatio > 0.22 &&
+          !stopRequestedRef.current
+        ) {
+          if (bargeInStartedAtRef.current === null) {
+            bargeInStartedAtRef.current = nowMs;
+          }
+          if (nowMs - bargeInStartedAtRef.current >= BARGE_IN_HOLD_MS) {
+            pendingBargeInRef.current = true;
+            stopSpeechNowRef.current();
+            scheduleBargeInCaptureTimeout();
+            bargeInStartedAtRef.current = null;
+          }
+        } else if (rms < adaptiveSoftThreshold) {
+          bargeInStartedAtRef.current = null;
+        }
 
         const previous = micSignatureRef.current;
         const sampleCount = (previous?.sampleCount ?? 0) + 1;
@@ -876,7 +1106,7 @@ export function useVoice() {
 
       tick();
     },
-    [stopMicFrequencyCapture]
+    [scheduleBargeInCaptureTimeout, stopMicFrequencyCapture]
   );
 
   const startSampleAudioAnalysis = useCallback(() => {
@@ -992,7 +1222,7 @@ export function useVoice() {
           );
 
           activeViseme = frame.viseme;
-          activeVolume = Math.max(normalized * 0.7, frame.intensity * 0.95);
+          activeVolume = frame.viseme === 0 ? 0 : Math.max(normalized * 0.55, frame.intensity * 0.9);
         }
 
         setState((previous) => ({
@@ -1013,16 +1243,27 @@ export function useVoice() {
 
   const stopAllSpeechPlayback = useCallback((nextState?: Partial<VoiceState>) => {
     stopRequestedRef.current = true;
+    speechQueueRunIdRef.current += 1;
+    playbackGenerationRef.current += 1;
+    playbackStopResolveRef.current?.();
+    playbackStopResolveRef.current = null;
+    activeUtteranceRef.current = null;
     speechQueueRef.current = [];
     processingQueueRef.current = false;
     synthRef.current?.cancel();
+    hardCancelBrowserSpeech();
 
     if (sampleAudioRef.current) {
+      sampleAudioRef.current.onended = null;
+      sampleAudioRef.current.onerror = null;
       sampleAudioRef.current.pause();
       sampleAudioRef.current.currentTime = 0;
     }
 
     if (playbackAudioRef.current) {
+      playbackAudioRef.current.onplay = null;
+      playbackAudioRef.current.onended = null;
+      playbackAudioRef.current.onerror = null;
       playbackAudioRef.current.pause();
       playbackAudioRef.current.currentTime = 0;
     }
@@ -1042,6 +1283,11 @@ export function useVoice() {
       ...nextState,
     }));
   }, [stopAudioAnalysis, stopVisemeAnimation]);
+
+  const claimAudioPlayback = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    claimAkanshaAudio(audioOwnerIdRef.current, () => stopAllSpeechPlayback());
+  }, [stopAllSpeechPlayback]);
 
   const startListening = useCallback(() => {
     if (
@@ -1165,9 +1411,15 @@ export function useVoice() {
       if (typeof window === 'undefined' || !synthRef.current) return;
       const text = item.text;
       const options = item.options;
+      const playbackId = ++playbackGenerationRef.current;
+      const isCurrentPlayback = () =>
+        playbackGenerationRef.current === playbackId && !stopRequestedRef.current;
 
+      claimAudioPlayback();
       const resolvedGender = options?.voiceGender ?? voiceGender;
       synthRef.current.cancel();
+      await settleBrowserSpeechCancel();
+      activeUtteranceRef.current = null;
       if (sampleAudioRef.current) {
         sampleAudioRef.current.pause();
         sampleAudioRef.current.currentTime = 0;
@@ -1191,6 +1443,7 @@ export function useVoice() {
           : item.preparedAudio
             ? await item.preparedAudio
             : await fetchSpeechBlob(text, options);
+        if (!isCurrentPlayback()) return;
         if (blob && playbackAudioRef.current) {
           const playbackUrl = URL.createObjectURL(blob);
           playbackUrlRef.current = playbackUrl;
@@ -1200,6 +1453,7 @@ export function useVoice() {
           audio.currentTime = 0;
 
           audio.onplay = () => {
+            if (!isCurrentPlayback()) return;
             setState((previous) => ({ ...previous, isSpeaking: true }));
             startPlaybackAudioAnalysis(text, languageMode, resolvedTone);
             if (backgroundListeningRef.current && !manuallyStoppedRef.current) {
@@ -1208,7 +1462,13 @@ export function useVoice() {
           };
 
           await new Promise<void>((resolve, reject) => {
+            playbackStopResolveRef.current = resolve;
             audio.onended = () => {
+              playbackStopResolveRef.current = null;
+              if (!isCurrentPlayback()) {
+                resolve();
+                return;
+              }
               stopAudioAnalysis();
               stopVisemeAnimation();
               setState((previous) => ({
@@ -1221,6 +1481,11 @@ export function useVoice() {
             };
 
             audio.onerror = () => {
+              playbackStopResolveRef.current = null;
+              if (!isCurrentPlayback()) {
+                resolve();
+                return;
+              }
               stopAudioAnalysis();
               stopVisemeAnimation();
               setState((previous) => ({
@@ -1232,6 +1497,10 @@ export function useVoice() {
               reject(new Error('Audio playback failed'));
             };
 
+            if (!isCurrentPlayback()) {
+              resolve();
+              return;
+            }
             void audio.play().catch(reject);
           });
           return;
@@ -1241,6 +1510,7 @@ export function useVoice() {
       }
 
       const utterance = new SpeechSynthesisUtterance(text);
+      activeUtteranceRef.current = utterance;
       utterance.lang =
         languageMode === 'hindi' ? 'hi-IN' : languageMode === 'telugu' || languageMode === 'mixed' ? 'te-IN' : 'en-IN';
       const matchingVoice =
@@ -1272,6 +1542,7 @@ export function useVoice() {
       utterance.volume = TONE_CONFIG[resolvedTone].volume;
 
       utterance.onstart = () => {
+        if (!isCurrentPlayback() || activeUtteranceRef.current !== utterance) return;
         setState((previous) => ({ ...previous, isSpeaking: true }));
         startVisemeAnimation(text, languageMode, resolvedTone);
         if (backgroundListeningRef.current && !manuallyStoppedRef.current) {
@@ -1280,27 +1551,46 @@ export function useVoice() {
       };
 
       await new Promise<void>((resolve, reject) => {
+        playbackStopResolveRef.current = resolve;
         utterance.onend = () => {
+          playbackStopResolveRef.current = null;
+          if (!isCurrentPlayback() || activeUtteranceRef.current !== utterance) {
+            resolve();
+            return;
+          }
+          activeUtteranceRef.current = null;
           setState((previous) => ({ ...previous, isSpeaking: false }));
           stopVisemeAnimation();
           resolve();
         };
 
         utterance.onerror = () => {
+          playbackStopResolveRef.current = null;
+          if (!isCurrentPlayback() || activeUtteranceRef.current !== utterance) {
+            resolve();
+            return;
+          }
+          activeUtteranceRef.current = null;
           setState((previous) => ({ ...previous, isSpeaking: false }));
           stopVisemeAnimation();
           reject(new Error('Speech synthesis failed'));
         };
 
+        if (!isCurrentPlayback()) {
+          resolve();
+          return;
+        }
         synthRef.current?.speak(utterance);
       });
     },
     [
       selectedVoiceId,
+      claimAudioPlayback,
       fetchSpeechBlob,
       startPlaybackAudioAnalysis,
       startListening,
       startVisemeAnimation,
+      settleBrowserSpeechCancel,
       stopAudioAnalysis,
       stopVisemeAnimation,
       voiceGender,
@@ -1313,8 +1603,13 @@ export function useVoice() {
     if (processingQueueRef.current) return;
     processingQueueRef.current = true;
     stopRequestedRef.current = false;
+    const runId = ++speechQueueRunIdRef.current;
 
-    while (!stopRequestedRef.current && speechQueueRef.current.length > 0) {
+    while (
+      speechQueueRunIdRef.current === runId &&
+      !stopRequestedRef.current &&
+      speechQueueRef.current.length > 0
+    ) {
       const nextItem = speechQueueRef.current.shift();
       if (!nextItem?.text.trim()) continue;
 
@@ -1325,8 +1620,14 @@ export function useVoice() {
       }
     }
 
-    processingQueueRef.current = false;
-    if (!stopRequestedRef.current && backgroundListeningRef.current) {
+    if (speechQueueRunIdRef.current === runId) {
+      processingQueueRef.current = false;
+    }
+    if (
+      speechQueueRunIdRef.current === runId &&
+      !stopRequestedRef.current &&
+      backgroundListeningRef.current
+    ) {
       window.setTimeout(() => startListening(), INTERRUPTION_RESTART_DELAY_MS);
     }
   }, [playSpeechChunk, startListening]);
@@ -1337,6 +1638,7 @@ export function useVoice() {
 
       if (!options?.queue) {
         stopAllSpeechPlayback();
+        claimAudioPlayback();
       }
 
       stopRequestedRef.current = false;
@@ -1389,6 +1691,7 @@ export function useVoice() {
     },
     [
       fetchSpeechBlob,
+      claimAudioPlayback,
       processSpeechQueue,
       stopAllSpeechPlayback,
       voiceGender,
@@ -1424,6 +1727,8 @@ export function useVoice() {
 
   const previewSelectedVoice = useCallback(() => {
     if (selectedVoiceId === FEMALE_SAMPLE_VOICE_ID && sampleAudioRef.current) {
+      stopAllSpeechPlayback();
+      claimAudioPlayback();
       const sampleAudio = sampleAudioRef.current;
       sampleAudio.pause();
       sampleAudio.currentTime = 0;
@@ -1448,10 +1753,21 @@ export function useVoice() {
       voiceGender,
       voiceTone,
     });
-  }, [selectedVoiceId, speak, startSampleAudioAnalysis, stopAudioAnalysis, stopVisemeAnimation, voiceGender, voiceTone]);
+  }, [
+    claimAudioPlayback,
+    selectedVoiceId,
+    speak,
+    startSampleAudioAnalysis,
+    stopAllSpeechPlayback,
+    stopAudioAnalysis,
+    stopVisemeAnimation,
+    voiceGender,
+    voiceTone,
+  ]);
 
   useEffect(() => {
     return () => {
+      releaseAkanshaAudio(audioOwnerIdRef.current);
       stopAudioAnalysis();
       if (sampleAudioRef.current) {
         sampleAudioRef.current.pause();
@@ -1490,5 +1806,6 @@ export function useVoice() {
     stopSpeaking,
     previewSelectedVoice,
     clearTranscript,
+    clearVoiceNotice,
   };
 }

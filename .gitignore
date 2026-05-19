@@ -1,25 +1,30 @@
 # AkanshaLive Project - Root Gitignore
-node_modules/
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 
-# Next.js build output
+# Dependencies
+node_modules/
+.pnp/
+.pnp.*
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+
+# Next.js / React / production output
 .next/
 out/
+dist/
+build/
 .turbo/
 
-# Production build
-build/
-
-# Logs
+# Logs and diagnostics
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+dev-server.log
+frontend-dev.log
 
 # Python
 __pycache__/
@@ -30,27 +35,42 @@ venv/
 env/
 .pytest_cache/
 
+# Test and coverage output
+coverage/
+test-results/
+playwright-report/
+.playwright/
+
 # OS-specific files
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Vercel deployment
+# Deployment / tooling
 .vercel/
 
 # TypeScript
 *.tsbuildinfo
 
 # IDEs
-.vscode/
 .idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 
-# Databases
+# Databases and local storage
 *.db
 *.sqlite
+*.sqlite3
 
-# Project Specific
+# Generated project artifacts
 graphify-out/
+tmp_*/
+aura/tmp_voice_recording_frames/
 aura/codechef-login.html
 aura/tmp-chat.html
 aura/debug_prompt.txt
-aura/tmp-chat.html
+
+# Agent logs
+.agent/
+.codex/

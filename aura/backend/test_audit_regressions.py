@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,10 +9,15 @@ from backend.ai_engine import (
     _build_live_answer_hint,
     _build_multi_question_live_context,
     _build_live_search_query,
+    _detect_emotional_state,
+    _detect_user_language_preference,
     _extract_matchups_from_live_context,
+    _humor_policy,
+    _language_instruction,
     _preferred_live_source_profile,
     _split_live_questions,
     _needs_live_web_context,
+    build_social_intelligence_context,
 )
 from backend.main import (
     _normalize_whatsapp_allowed_contact,
@@ -22,6 +28,9 @@ from backend.main import (
     normalize_auth_email,
     verify_password,
 )
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeRect:
@@ -107,6 +116,174 @@ class AuditRegressionTests(unittest.TestCase):
         self.assertEqual(_speaker_access_level("owner"), "owner")
         self.assertEqual(_speaker_access_level("guest"), "guest")
         self.assertEqual(_speaker_access_level("unknown"), "guest")
+
+    def test_social_intelligence_context_adapts_mother_relationship(self):
+        context = build_social_intelligence_context(
+            {
+                "display_name": "Amma",
+                "relationship_to_owner": "mother",
+                "access_level": "trusted",
+                "closeness_level": "close",
+                "language_preference": "telugu_english",
+                "notes": "Yogesh's mother",
+            },
+            "I am worried about his food",
+            "stressed",
+        )
+
+        self.assertIn("Active speaker: Amma", context)
+        self.assertIn("Relationship to owner Yogesh: mother", context)
+        self.assertIn("Closeness level: close", context)
+        self.assertIn("food, health, rest", context)
+        self.assertIn("Telugu + English", context)
+        self.assertIn("Mood state: stressed", context)
+        self.assertIn("protected actions need owner approval", context)
+
+    def test_social_intelligence_context_defaults_to_owner_for_chat_session(self):
+        context = build_social_intelligence_context(None, "continue my project work", None)
+
+        self.assertIn("Active speaker: Yogesh", context)
+        self.assertIn("Relationship to owner Yogesh: owner", context)
+        self.assertIn("Closeness level: close", context)
+        self.assertIn("personal assistant plus close companion", context)
+
+    def test_emotional_state_detection_from_text(self):
+        self.assertEqual(_detect_emotional_state("I am very tired today"), "tired")
+        self.assertEqual(_detect_emotional_state("this exam pressure is stressful"), "stressed")
+        self.assertEqual(_detect_emotional_state("awesome super excited"), "excited")
+
+    def test_friend_humor_depends_on_closeness_and_mood(self):
+        close_friend = build_social_intelligence_context(
+            {
+                "display_name": "Rahul",
+                "relationship_to_owner": "friend",
+                "access_level": "trusted",
+                "closeness_level": "close",
+                "communication_style": "college banter",
+                "language_preference": "hinglish",
+                "interaction_count": 31,
+            },
+            "bro I finally finished the assignment",
+            "happy",
+        )
+
+        self.assertIn("playful teasing is allowed", close_friend)
+        self.assertIn("Hinglish", close_friend)
+        self.assertIn("college-style banter", close_friend)
+
+        stressed_friend_policy = _humor_policy("friend", "close", "stressed")
+        self.assertIn("Humor: off", stressed_friend_policy)
+
+    def test_social_context_includes_recent_speaker_history_subtly(self):
+        context = build_social_intelligence_context(
+            {
+                "display_name": "Rahul",
+                "relationship_to_owner": "friend",
+                "access_level": "trusted",
+                "closeness_level": "normal",
+                "recent_interactions": [
+                    {"role": "user", "content": "My lab exam is tomorrow", "mood_state": "stressed"},
+                    {"role": "assistant", "content": "Let's revise the key parts calmly.", "mood_state": "stressed"},
+                ],
+            },
+            "hey",
+            "neutral",
+        )
+
+        self.assertIn("Recent per-speaker interaction history", context)
+        self.assertIn("My lab exam is tomorrow", context)
+        self.assertIn("Use recent per-speaker history subtly", context)
+
+    def test_language_detection_handles_ten_telugu_inputs(self):
+        telugu_cases = [
+            "ఏమైంది రా ఈరోజు silent గా ఉన్నావ్",
+            "నాకు ఈ topic explain cheppu",
+            "ఇప్పుడు class lo emi jarigindi",
+            "సరే anna project chudu",
+            "ఎక్కడ issue undi cheppandi",
+            "em chestunnav ra",
+            "naku exam tension undi cheppu",
+            "ippudu ela prepare avvali",
+            "sare inka next task cheppu",
+            "assignment lo emi mistake undi",
+        ]
+
+        for text in telugu_cases:
+            with self.subTest(text=text):
+                self.assertEqual(_detect_user_language_preference(text, "english"), "telugu_english")
+
+    def test_language_detection_handles_ten_hindi_inputs(self):
+        hindi_cases = [
+            "क्या हुआ आज थोड़ा tired लग रहे हो",
+            "मुझे यह topic समझाओ",
+            "आज class में क्या हुआ",
+            "ठीक है अब next task बताओ",
+            "कहाँ issue आ रहा है",
+            "kya hua aaj thoda tired ho",
+            "mujhe ye topic samjhao",
+            "kaise prepare karna hai batao",
+            "aap theek ho kya",
+            "bas ab ruk jao",
+        ]
+
+        for text in hindi_cases:
+            with self.subTest(text=text):
+                self.assertEqual(_detect_user_language_preference(text, "english"), "hindi")
+
+    def test_language_detection_handles_ten_mixed_language_inputs(self):
+        mixed_cases = [
+            ("Bro today class lo sir Hindi lo explain chesadu", "telugu_english"),
+            ("Exam ki vellali but mood ledu", "telugu_english"),
+            ("Project lo issue undi can you check", "telugu_english"),
+            ("Sare now open browser and chudu", "telugu_english"),
+            ("Naku output ravatledu please debug", "telugu_english"),
+            ("Bro kya scene hai today class lo", "hindi"),
+            ("Aaj assignment submit karna hai okay", "hindi"),
+            ("Mujhe code samjhao but simple English lo", "hindi"),
+            ("Ruko bas one minute I will tell", "hindi"),
+            ("Kya bro college life chal raha hai", "hindi"),
+        ]
+
+        for text, expected in mixed_cases:
+            with self.subTest(text=text):
+                self.assertEqual(_detect_user_language_preference(text, "english"), expected)
+
+    def test_language_instruction_prevents_english_fallback_for_indian_languages(self):
+        hindi_instruction = _language_instruction("hindi", "hindi")
+        telugu_instruction = _language_instruction("telugu_english", "telugu_english")
+
+        self.assertIn("Devanagari", hindi_instruction)
+        self.assertIn("Indian Hindi", hindi_instruction)
+        self.assertIn("Do not answer only in English", hindi_instruction)
+        self.assertIn("Telugu + English", telugu_instruction)
+        self.assertIn("Indian Telugu speaker", telugu_instruction)
+        self.assertIn("do not answer only in English", telugu_instruction)
+
+    def test_frontend_speech_paths_use_one_shared_audio_guard(self):
+        guard = (PROJECT_ROOT / "src/lib/audioPlaybackGuard.ts").read_text(encoding="utf-8")
+        voice_hook = (PROJECT_ROOT / "src/hooks/useVoice.ts").read_text(encoding="utf-8")
+        chat_thread = (
+            PROJECT_ROOT / "src/app/chat-interface/components/ChatThread.tsx"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("claimAkanshaAudio", guard)
+        self.assertIn("hardCancelBrowserSpeech", guard)
+        self.assertIn("settleBrowserSpeechCancel", guard)
+        self.assertIn("@/lib/audioPlaybackGuard", voice_hook)
+        self.assertIn("@/lib/audioPlaybackGuard", chat_thread)
+        self.assertNotIn("window.__akanshaAudioOwner", voice_hook)
+        self.assertNotIn("window.__akanshaAudioOwner", chat_thread)
+
+    def test_avatar_shader_disables_portrait_mouth_bulge(self):
+        avatar_stage = (
+            PROJECT_ROOT / "src/components/assistant/AssistantAvatarStage.tsx"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("p.z += mouth * 0.0", avatar_stage)
+        self.assertIn("p.y -= mouth * 0.0", avatar_stage)
+        self.assertIn("p.y -= jaw * 0.0", avatar_stage)
+        self.assertNotIn("p.z += mouth * (", avatar_stage)
+        self.assertNotIn("jaw * uSpeech", avatar_stage)
 
     def test_media_followup_sets_volume_and_clicks_requested_result(self):
         plan = build_browser_prompt_plan("play third song and play at 60 volume")

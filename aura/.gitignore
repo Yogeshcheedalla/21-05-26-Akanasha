@@ -1,9 +1,63 @@
 # Aura Sub-directory Gitignore
-# Rules are primarily managed in the root .gitignore
+# Rules are primarily managed in the root .gitignore.
 
+# Dependencies
 node_modules/
+.pnp/
+.pnp.*
+
+# Environment and local secrets
 .env
-*.db
+.env.*
+!.env.example
+
+# Build and framework output
 .next/
-*.log
+out/
+dist/
+build/
+.turbo/
 *.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dev-server.log
+frontend-dev.log
+
+# Local data
+*.db
+*.sqlite
+*.sqlite3
+
+# Python and tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Tests and reports
+coverage/
+test-results/
+playwright-report/
+.playwright/
+
+# Temporary generated artifacts
+tmp_*/
+tmp_voice_recording_frames/
+codechef-login.html
+tmp-chat.html
+debug_prompt.txt
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
