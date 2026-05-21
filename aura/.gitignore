@@ -32,6 +32,53 @@ frontend-dev.log
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Akansha / Hermes local runtime state
+backend/hermes/database/*.db
+backend/hermes/database/*.db-*
+backend/hermes/database/*.sqlite*
+backend/hermes/database/*.sqlite3*
+backend/uploads/
+backend/generated/
+backend/tmp/
+backend/.cache/
+backend/local_storage/
+backend/memory/
+backend/vector_store/
+backend/chroma/
+backend/faiss/
+
+# Generated user artifacts
+public/generated/
+generated/
+generated/**
+downloads/
+exports/
+artifacts/
+*.generated.pdf
+*.generated.docx
+*.generated.pptx
+*.generated.xlsx
+*.generated.csv
+*.generated.json
+*.generated.zip
+
+# Voice, media, and screenshot scratch files
+recordings/
+screenshots/
+tmp_voice_recording_frames/
+*.webm
+*.wav
+*.mp3.tmp
+*.mp4.tmp
+*.png.tmp
+*.jpg.tmp
 
 # Python and tooling caches
 __pycache__/
@@ -49,10 +96,18 @@ playwright-report/
 # Temporary generated artifacts
 generated_artifacts/
 tmp_*/
-tmp_voice_recording_frames/
 codechef-login.html
 tmp-chat.html
 debug_prompt.txt
+
+# Local provider/runtime cache
+.openrouter-cache/
+.openai-cache/
+.mcp-cache/
+.codex-cache/
+*.local.json
+*.local.yaml
+*.local.yml
 
 # OS / editor files
 .DS_Store
