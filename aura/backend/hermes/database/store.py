@@ -100,6 +100,7 @@ class CognitiveStore:
         self._init_experiences()
         self._init_agents()
         self._init_operating_system()
+        self._init_goal_engine()
 
     def _init_memories(self) -> None:
         with self.connect(self.files.memories) as conn:
@@ -373,6 +374,129 @@ class CognitiveStore:
                 CREATE INDEX IF NOT EXISTS idx_workflow_intent ON workflow_templates(intent);
                 CREATE INDEX IF NOT EXISTS idx_background_jobs_due ON background_jobs(status, next_run_at);
                 CREATE INDEX IF NOT EXISTS idx_multimodal_session ON multimodal_contexts(session_id, created_at);
+                """
+            )
+
+    def _init_goal_engine(self) -> None:
+        with self.connect(self.files.agents) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS goals (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    goal_type TEXT NOT NULL,
+                    goal_owner TEXT NOT NULL,
+                    goal_context TEXT NOT NULL,
+                    priority REAL NOT NULL,
+                    deadline TEXT,
+                    progress REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    estimated_effort REAL NOT NULL DEFAULT 0,
+                    completion_score REAL NOT NULL DEFAULT 0,
+                    goal_health TEXT NOT NULL DEFAULT 'healthy',
+                    blocked_reason TEXT NOT NULL DEFAULT '',
+                    risk_score REAL NOT NULL DEFAULT 0,
+                    milestones TEXT NOT NULL DEFAULT '[]',
+                    execution_state TEXT NOT NULL DEFAULT '{}',
+                    confidence REAL NOT NULL DEFAULT 0.75,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS goal_dependencies (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT NOT NULL,
+                    depends_on_goal_id TEXT NOT NULL,
+                    dependency_type TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(goal_id, depends_on_goal_id),
+                    FOREIGN KEY(goal_id) REFERENCES goals(id) ON DELETE CASCADE,
+                    FOREIGN KEY(depends_on_goal_id) REFERENCES goals(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS goal_tasks (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT NOT NULL,
+                    parent_task_id TEXT,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    agent_type TEXT NOT NULL,
+                    skill_name TEXT NOT NULL,
+                    priority REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    estimated_effort REAL NOT NULL DEFAULT 1,
+                    deadline TEXT,
+                    dependency_ids TEXT NOT NULL DEFAULT '[]',
+                    confidence REAL NOT NULL DEFAULT 0.75,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(goal_id) REFERENCES goals(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS goal_milestones (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    due_at TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    progress REAL NOT NULL DEFAULT 0,
+                    confidence REAL NOT NULL DEFAULT 0.75,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(goal_id) REFERENCES goals(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS goal_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    goal_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(goal_id) REFERENCES goals(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS opportunities (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT,
+                    source TEXT NOT NULL,
+                    signal_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    recommendation TEXT NOT NULL,
+                    priority REAL NOT NULL,
+                    risk_score REAL NOT NULL,
+                    confidence REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS decision_simulations (
+                    id TEXT PRIMARY KEY,
+                    decision TEXT NOT NULL,
+                    choices TEXT NOT NULL,
+                    ranked_choices TEXT NOT NULL,
+                    context TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS personal_os_items (
+                    id TEXT PRIMARY KEY,
+                    item_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    attributes TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_goals_owner ON goals(goal_owner, updated_at);
+                CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status, priority);
+                CREATE INDEX IF NOT EXISTS idx_goal_tasks_goal ON goal_tasks(goal_id, status);
+                CREATE INDEX IF NOT EXISTS idx_goal_milestones_goal ON goal_milestones(goal_id, status);
+                CREATE INDEX IF NOT EXISTS idx_opportunities_goal ON opportunities(goal_id, priority);
+                CREATE INDEX IF NOT EXISTS idx_personal_os_type ON personal_os_items(item_type, updated_at);
                 """
             )
 
