@@ -57,8 +57,10 @@ from .artifact_engine import (
     sanitize_model_artifact_placeholders,
 )
 from .automation import execute_desktop_command
+from .hermes.api import router as hermes_router
 
 app = FastAPI(title="Akansha AI Engine")
+app.include_router(hermes_router)
 planner_reminder_registry: dict[str, dict[str, Any]] = {}
 planner_scheduler_task: asyncio.Task | None = None
 planner_reminder_history: list[dict[str, Any]] = []
